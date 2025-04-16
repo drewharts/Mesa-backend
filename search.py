@@ -30,6 +30,10 @@ class SearchProvider(ABC):
     @abstractmethod
     def search(self, query: str, limit: int = 10) -> List[SearchResult]:
         pass
+        
+    @abstractmethod
+    def get_place_details(self, place_id: str) -> SearchResult:
+        pass
 
 class WhooshSearchProvider(SearchProvider):
     def __init__(self, index_path: str = "whoosh_index"):
@@ -82,39 +86,97 @@ class WhooshSearchProvider(SearchProvider):
             
             return search_results
 
+    def get_place_details(self, place_id: str) -> SearchResult:
+        with self.ix.searcher() as searcher:
+            query = whoosh.qparser.QueryParser("place_id", self.ix.schema).parse(place_id)
+            results = searcher.search(query, limit=1)
+            
+            if not results:
+                raise ValueError(f"Place with ID {place_id} not found")
+                
+            result = results[0]
+            return SearchResult(
+                name=result["name"],
+                address=result.get("address", ""),
+                latitude=result.get("latitude", 0.0),
+                longitude=result.get("longitude", 0.0),
+                place_id=result["place_id"],
+                source="local_database"
+            )
+            
+    def save_place(self, place: SearchResult) -> None:
+        with self.ix.writer() as writer:
+            writer.add_document(
+                name=place.name,
+                place_id=place.place_id,
+                address=place.address,
+                latitude=place.latitude,
+                longitude=place.longitude
+            )
+
 class MapboxSearchProvider(SearchProvider):
     def __init__(self, access_token: str):
         self.access_token = access_token
-        self.base_url = "https://api.mapbox.com/geocoding/v5/mapbox.places"
+        self.base_url = "https://api.mapbox.com/search/searchbox/v1"
         self.storage = PlaceStorage()
+        self.cache = PlacesCache()
 
     def search(self, query: str, limit: int = 10, latitude: float = None, longitude: float = None) -> List[SearchResult]:
         params = {
             "access_token": self.access_token,
             "q": query,
             "limit": limit,
-            "types": "poi",  # Only search for points of interest
+            "language": "en",
+            "country": "US",
+            "types": "poi",
+            "session_token": self.cache.get_session_token() if hasattr(self, 'cache') else None
         }
         
         # Add proximity if coordinates are provided
         if latitude is not None and longitude is not None:
             params["proximity"] = f"{longitude},{latitude}"
         
-        response = requests.get(f"{self.base_url}/{query}.json", params=params)
-        response.raise_for_status()
-        data = response.json()
+        # Remove None values from params
+        params = {k: v for k, v in params.items() if v is not None}
         
-        results = []
-        for feature in data.get("features", []):
-            # Only include results that have a name property
-            if "text" in feature:
+        logger.debug(f"Mapbox search params: {params}")
+        url = f"{self.base_url}/suggest"
+        logger.debug(f"Mapbox API URL: {url}")
+        
+        try:
+            response = requests.get(url, params=params)
+            logger.debug(f"Mapbox API Response Status: {response.status_code}")
+            logger.debug(f"Mapbox API Response Headers: {response.headers}")
+            
+            if response.status_code != 200:
+                logger.error(f"Mapbox API Error: {response.text}")
+                return []
+                
+            response.raise_for_status()
+            data = response.json()
+            
+            logger.debug(f"Mapbox response data: {data}")
+            
+            results = []
+            for suggestion in data.get("suggestions", []):
+                # Get the name and full address
+                name = suggestion.get("name", "")
+                full_address = suggestion.get("place_formatted", "")  # Updated to use place_formatted
+                
+                # Get coordinates if available
+                point = suggestion.get("point", {})
+                coordinates = point.get("coordinates", {})
+                longitude = coordinates[0] if coordinates else 0.0
+                latitude = coordinates[1] if coordinates else 0.0
+                
                 search_result = SearchResult(
-                    name=feature.get("text", ""),
-                    address=feature.get("place_name", ""),
-                    latitude=feature["center"][1],
-                    longitude=feature["center"][0],
-                    place_id=feature.get("id"),
-                    source="mapbox"
+                    name=name,
+                    address=full_address,
+                    latitude=latitude,
+                    longitude=longitude,
+                    place_id=suggestion.get("mapbox_id"),
+                    source="mapbox",
+                    additional_data=suggestion
                 )
                 
                 # Save to Firestore
@@ -124,7 +186,36 @@ class MapboxSearchProvider(SearchProvider):
                     logger.error(f"Error saving place to Firestore: {str(e)}")
                     
                 results.append(search_result)
-        return results
+                logger.debug(f"Mapbox result: {search_result.name} at {search_result.address}")
+            
+            logger.debug(f"Total Mapbox results found: {len(results)}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in Mapbox search: {str(e)}", exc_info=True)
+            return []
+
+    def get_place_details(self, place_id: str) -> SearchResult:
+        url = f"{self.base_url}/retrieve/{place_id}"
+        response = requests.get(
+            url,
+            params={"access_token": self.access_token}
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data:
+            raise ValueError(f"Place with ID {place_id} not found")
+            
+        feature = data["features"][0] if "features" in data else data
+        return SearchResult(
+            name=feature.get("name", ""),
+            address=feature.get("full_address", ""),
+            latitude=feature.get("coordinates", {}).get("latitude", 0.0),
+            longitude=feature.get("coordinates", {}).get("longitude", 0.0),
+            place_id=feature.get("mapbox_id"),
+            source="mapbox"
+        )
 
 class PlacesCache:
     def __init__(self, cache_duration: int = 3600):  # Default cache duration: 1 hour
@@ -221,24 +312,17 @@ class GooglePlacesSearchProvider(SearchProvider):
         # Get a session token for this search session
         session_token = self.cache.get_session_token()
         
-        # Prepare the autocomplete request
-        params = {
-            "input": query,
-            "language": "en",
-            "region": "US",
-            "types": "establishment",  # Search for businesses/establishments
-            "sessiontoken": session_token,
-            "fields": "name,formatted_address,geometry,place_id"  # Minimize fields to reduce costs
-        }
-        
-        # Add location bias if coordinates are provided
-        if latitude is not None and longitude is not None:
-            params["location"] = f"{latitude},{longitude}"
-            params["radius"] = 50000  # 50km radius
-            
         try:
-            # Use Places Autocomplete API
-            response = self.client.places_autocomplete(**params)
+            # Use Places Autocomplete API with correct parameter names
+            response = self.client.places_autocomplete(
+                input=query,  # Changed from query_text to input
+                language="en",
+                region="US",
+                types=["establishment"],
+                sessiontoken=session_token
+            )
+            
+            logger.debug(f"Google Places response: {response}")
             
             results = []
             for prediction in response[:limit]:
@@ -248,7 +332,7 @@ class GooglePlacesSearchProvider(SearchProvider):
                     place_details = self.client.place(
                         place_id,
                         fields=["name", "formatted_address", "geometry", "place_id"],
-                        session_token=session_token
+                        sessiontoken=session_token
                     )
                     
                     if "result" in place_details:
@@ -269,6 +353,7 @@ class GooglePlacesSearchProvider(SearchProvider):
                             logger.error(f"Error saving place to Firestore: {str(e)}")
                             
                         results.append(search_result)
+                        logger.debug(f"Google Places result: {search_result.name} at {search_result.address}")
             
             # Cache the results
             self.cache.set(query, latitude, longitude, results)
@@ -277,6 +362,29 @@ class GooglePlacesSearchProvider(SearchProvider):
         except Exception as e:
             logger.error(f"Error in Google Places search: {str(e)}")
             return []
+
+    def get_place_details(self, place_id: str) -> SearchResult:
+        try:
+            place_details = self.client.place(
+                place_id,
+                fields=["name", "formatted_address", "geometry", "place_id"]
+            )
+            
+            if "result" not in place_details:
+                raise ValueError(f"Place with ID {place_id} not found")
+                
+            place = place_details["result"]
+            return SearchResult(
+                name=place.get("name", ""),
+                address=place.get("formatted_address", ""),
+                latitude=place["geometry"]["location"]["lat"],
+                longitude=place["geometry"]["location"]["lng"],
+                place_id=place.get("place_id"),
+                source="google_places"
+            )
+        except Exception as e:
+            logger.error(f"Error getting Google Places details: {str(e)}")
+            raise
 
 class SearchOrchestrator:
     def __init__(self, whoosh_provider: WhooshSearchProvider,
