@@ -18,8 +18,8 @@ load_dotenv()  # Load environment variables
 
 app = Flask(__name__)
 
-# Create a temporary directory for Whoosh index if needed
-whoosh_index_dir = os.getenv('WHOOSH_INDEX_DIR', os.path.join(tempfile.gettempdir(), 'whoosh_index'))
+# Create a persistent directory for Whoosh index
+whoosh_index_dir = os.getenv('WHOOSH_INDEX_DIR', 'whoosh_index')
 os.makedirs(whoosh_index_dir, exist_ok=True)
 logger.info(f"Using Whoosh index directory: {whoosh_index_dir}")
 
@@ -35,6 +35,14 @@ try:
     )
     if not whoosh.index.exists_in(whoosh_index_dir):
         whoosh.index.create_in(whoosh_index_dir, schema)
+        # Populate the index from Firestore if it's empty
+        try:
+            from index_places import index_places_from_firestore
+            logger.info("Populating Whoosh index from Firestore...")
+            index_places_from_firestore()
+            logger.info("Whoosh index population completed")
+        except Exception as e:
+            logger.error(f"Error populating Whoosh index: {str(e)}")
     whoosh_provider = WhooshSearchProvider(index_path=whoosh_index_dir)
     logger.info("Whoosh search provider initialized successfully")
 except Exception as e:
@@ -265,6 +273,19 @@ def health_check():
     
     logger.info(f"Health status: {health_status}")
     return jsonify(health_status), 200
+
+@app.route('/admin/reindex', methods=['POST'])
+def reindex_places():
+    """Admin endpoint to manually trigger reindexing of places from Firestore"""
+    try:
+        from index_places import index_places_from_firestore
+        logger.info("Manual reindex triggered")
+        index_places_from_firestore()
+        logger.info("Reindex completed successfully")
+        return jsonify({"status": "success", "message": "Reindex completed successfully"}), 200
+    except Exception as e:
+        logger.error(f"Error during reindex: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5002))
