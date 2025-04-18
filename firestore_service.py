@@ -1,9 +1,10 @@
 from firebase_admin import credentials, firestore, initialize_app
 import os
+import firebase_admin
 
 class FirestoreService:
     def __init__(self):
-        cred_path = os.getenv('FIRESTORE_CREDENTIALS_PATH')
+        cred_path = os.getenv('FIRESTORE_CREDENTIALS')
         if not cred_path or not os.path.exists(cred_path):
             raise ValueError("Firestore credentials path not found")
         cred = credentials.Certificate(cred_path)
