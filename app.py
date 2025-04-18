@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 import logging
 import tempfile
+import sys
 from search import WhooshSearchProvider, MapboxSearchProvider, GooglePlacesSearchProvider, SearchOrchestrator
 from search.storage import PlaceStorage
 
@@ -28,25 +29,50 @@ except Exception as e:
     whoosh_provider = None
 
 try:
-    mapbox_provider = MapboxSearchProvider(access_token=os.getenv('MAPBOX_ACCESS_TOKEN'))
-    logger.info("Mapbox search provider initialized successfully")
+    mapbox_token = os.getenv('MAPBOX_ACCESS_TOKEN')
+    if mapbox_token:
+        mapbox_provider = MapboxSearchProvider(access_token=mapbox_token)
+        logger.info("Mapbox search provider initialized successfully")
+    else:
+        logger.warning("MAPBOX_ACCESS_TOKEN not set. Mapbox provider disabled.")
+        mapbox_provider = None
 except Exception as e:
     logger.error(f"Error initializing Mapbox search provider: {str(e)}")
     mapbox_provider = None
 
 try:
-    google_places_provider = GooglePlacesSearchProvider(api_key=os.getenv('GOOGLE_PLACES_API_KEY'))
-    logger.info("Google Places search provider initialized successfully")
+    google_key = os.getenv('GOOGLE_PLACES_API_KEY')
+    if google_key:
+        google_places_provider = GooglePlacesSearchProvider(api_key=google_key)
+        logger.info("Google Places search provider initialized successfully")
+    else:
+        logger.warning("GOOGLE_PLACES_API_KEY not set. Google Places provider disabled.")
+        google_places_provider = None
 except Exception as e:
     logger.error(f"Error initializing Google Places search provider: {str(e)}")
     google_places_provider = None
 
-# Initialize search orchestrator
+# Initialize search orchestrator with available providers
 search_orchestrator = SearchOrchestrator(
     whoosh_provider=whoosh_provider,
     mapbox_provider=mapbox_provider,
     google_places_provider=google_places_provider
 )
+
+@app.route('/', methods=['GET'])
+def index():
+    """Root endpoint that returns basic API information"""
+    return jsonify({
+        "name": "Mesa Backend API",
+        "version": "1.0.0",
+        "status": "running",
+        "endpoints": [
+            {"path": "/", "methods": ["GET"], "description": "This endpoint - API information"},
+            {"path": "/health", "methods": ["GET"], "description": "Health check endpoint"},
+            {"path": "/search/suggestions", "methods": ["GET"], "description": "Get search suggestions"},
+            {"path": "/search/place-details", "methods": ["GET"], "description": "Get place details"}
+        ]
+    })
 
 @app.route('/search/suggestions', methods=['GET'])
 def search_suggestions():
@@ -91,6 +117,9 @@ def search_suggestions():
             results = google_places_provider.search(query, limit, latitude, longitude)
         elif provider == 'all':
             logger.debug("Using all search providers")
+            # Check if any providers are available
+            if not any([whoosh_provider, mapbox_provider, google_places_provider]):
+                return jsonify({"error": "No search providers are available", "suggestions": []}), 200
             results = search_orchestrator.search(query, limit, latitude, longitude)
         else:
             logger.warning(f"Invalid provider specified: {provider}")
@@ -201,7 +230,28 @@ def get_place_details():
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint for Railway"""
-    return jsonify({"status": "ok"}), 200
+    # Log environment information
+    logger.info("Health check called")
+    logger.info(f"Environment variables: PORT={os.getenv('PORT')}, "
+               f"MAPBOX_TOKEN_SET={os.getenv('MAPBOX_ACCESS_TOKEN') is not None}, "
+               f"GOOGLE_KEY_SET={os.getenv('GOOGLE_PLACES_API_KEY') is not None}")
+    
+    # Return basic health status if we at least got this far
+    health_status = {
+        "status": "ok",
+        "providers": {
+            "whoosh": whoosh_provider is not None,
+            "mapbox": mapbox_provider is not None,
+            "google_places": google_places_provider is not None
+        },
+        "environment": {
+            "python_version": sys.version,
+            "flask_running": True
+        }
+    }
+    
+    logger.info(f"Health status: {health_status}")
+    return jsonify(health_status), 200
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5002))
