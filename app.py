@@ -6,6 +6,9 @@ import tempfile
 import sys
 from search import WhooshSearchProvider, MapboxSearchProvider, GooglePlacesSearchProvider, SearchOrchestrator
 from search.storage import PlaceStorage
+import whoosh
+from whoosh.fields import Schema, TEXT, ID, STORED
+from whoosh.analysis import StandardAnalyzer
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -22,6 +25,16 @@ logger.info(f"Using Whoosh index directory: {whoosh_index_dir}")
 
 # Initialize search providers
 try:
+    # Initialize Whoosh with schema
+    schema = Schema(
+        name=TEXT(stored=True, analyzer=StandardAnalyzer()),
+        place_id=ID(stored=True),
+        address=STORED,
+        latitude=STORED,
+        longitude=STORED
+    )
+    if not whoosh.index.exists_in(whoosh_index_dir):
+        whoosh.index.create_in(whoosh_index_dir, schema)
     whoosh_provider = WhooshSearchProvider(index_path=whoosh_index_dir)
     logger.info("Whoosh search provider initialized successfully")
 except Exception as e:
