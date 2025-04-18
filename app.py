@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 import logging
 from search import WhooshSearchProvider, MapboxSearchProvider, GooglePlacesSearchProvider, SearchOrchestrator
+from search.storage import PlaceStorage
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -127,9 +128,16 @@ def get_place_details():
         # Save to local database if not already there
         if source != 'local':
             try:
+                # Save to Whoosh index
                 whoosh_provider.save_place(place)
+                logger.info(f"Saved place to Whoosh index: {place.name}")
+                
+                # Save to Firestore
+                storage = PlaceStorage()
+                firestore_id = storage.save_place(place)
+                logger.info(f"Saved place to Firestore with ID: {firestore_id}")
             except Exception as e:
-                logger.error(f"Error saving place to local database: {str(e)}")
+                logger.error(f"Error saving place: {str(e)}")
                 
         # Return detailed place information
         return jsonify({
@@ -153,4 +161,5 @@ def get_place_details():
         }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    port = int(os.getenv('PORT', 5002))
+    app.run(host='0.0.0.0', port=port, debug=True)
