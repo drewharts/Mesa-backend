@@ -22,7 +22,7 @@ logger.info(f"Using Whoosh index directory: {whoosh_index_dir}")
 
 # Initialize search providers
 try:
-    whoosh_provider = WhooshSearchProvider(index_dir=whoosh_index_dir)
+    whoosh_provider = WhooshSearchProvider(index_path=whoosh_index_dir)
     logger.info("Whoosh search provider initialized successfully")
 except Exception as e:
     logger.error(f"Error initializing Whoosh search provider: {str(e)}")
