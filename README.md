@@ -6,7 +6,7 @@ A backend service that integrates multiple search providers (Whoosh, Mapbox, Goo
 
 - Multiple search provider integration:
   - Whoosh for local searches
-  - Mapbox for geocoding
+  - Mapbox for Place Details
   - Google Places API for place details
 - Caching system for search results
 - Firestore integration for place storage
