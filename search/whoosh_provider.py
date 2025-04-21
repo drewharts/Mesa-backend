@@ -51,7 +51,7 @@ class WhooshSearchProvider(SearchProvider):
                     latitude=result.get("latitude", 0.0),
                     longitude=result.get("longitude", 0.0),
                     place_id=result["place_id"],
-                    source="local_database"
+                    source="local"
                 )
                 for result in results
             ]
@@ -76,7 +76,7 @@ class WhooshSearchProvider(SearchProvider):
                 latitude=result.get("latitude", 0.0),
                 longitude=result.get("longitude", 0.0),
                 place_id=result["place_id"],
-                source="local_database"
+                source="local"
             )
             
     def save_place(self, place: SearchResult) -> None:
