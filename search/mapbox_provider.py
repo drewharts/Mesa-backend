@@ -15,7 +15,6 @@ class MapboxSearchProvider(SearchProvider):
         self.base_url = "https://api.mapbox.com/search/searchbox/v1"
         self.storage = PlaceStorage()
         self.cache = PlacesCache()
-        self._search_results_cache = {}  # Cache for search results by place_id
 
     def search(self, query: str, limit: int = 10, latitude: float = None, longitude: float = None) -> List[SearchResult]:
         params = {
@@ -72,6 +71,10 @@ class MapboxSearchProvider(SearchProvider):
                 if not mapbox_id:
                     continue
                 
+                # Log the raw suggestion and mapbox_id for debugging
+                logger.debug(f"Raw suggestion: {suggestion}")
+                logger.debug(f"Mapbox ID from suggestion: {mapbox_id}")
+                
                 # Get the name and full address
                 name = suggestion.get("name", "")
                 full_address = suggestion.get("place_formatted", "")
@@ -112,8 +115,6 @@ class MapboxSearchProvider(SearchProvider):
                 # Add to unique results and seen places
                 unique_results[mapbox_id] = search_result
                 seen_places.add(place_key)
-                # Cache the result for later use in get_place_details
-                self._search_results_cache[mapbox_id] = search_result
                 logger.debug(f"Mapbox result: {search_result.name} at {search_result.address}")
             
             # Convert dictionary values to list
@@ -127,63 +128,50 @@ class MapboxSearchProvider(SearchProvider):
             return []
 
     def get_place_details(self, place_id: str) -> SearchResult:
-        # First check if we have the result in our cache
-        if place_id in self._search_results_cache:
-            logger.debug(f"Returning cached result for place_id: {place_id}")
-            return self._search_results_cache[place_id]
-            
-        # If not in cache, fetch from Mapbox API
-        url = f"{self.base_url}/retrieve/{place_id}"
+        # URL encode the place_id to handle special characters
+        encoded_place_id = requests.utils.quote(place_id)
+        url = f"{self.base_url}/retrieve/{encoded_place_id}"
         params = {
             "access_token": self.access_token,
-            "language": "en",
-            "country": "US"
+            "session_token": self.cache.get_session_token() if hasattr(self, 'cache') else None
         }
+        
+        # Remove None values from params
+        params = {k: v for k, v in params.items() if v is not None}
+        
+        logger.debug(f"Retrieving place details for ID: {place_id}")
+        logger.debug(f"Encoded URL: {url}")
+        logger.debug(f"Request params: {params}")
         
         try:
             response = requests.get(url, params=params)
-            logger.debug(f"Mapbox retrieve API Response Status: {response.status_code}")
+            logger.debug(f"Response status: {response.status_code}")
+            logger.debug(f"Response body: {response.text}")
             
-            if response.status_code != 200:
-                logger.error(f"Mapbox API Error: {response.text}")
-                raise ValueError(f"Place with ID {place_id} not found")
-                
             response.raise_for_status()
             data = response.json()
             
-            logger.debug(f"Mapbox retrieve response data: {data}")
+            if not data or "features" not in data or not data["features"]:
+                raise ValueError(f"Place with ID {place_id} not found")
+                
+            feature = data["features"][0]
+            properties = feature.get("properties", {})
             
-            # Get the feature from the response
-            feature = data["features"][0] if "features" in data else data
-            
-            # Extract coordinates
-            point = feature.get("point", {})
-            coordinates = point.get("coordinates", [])
+            # Mapbox returns coordinates as [longitude, latitude]
+            coordinates = feature.get("geometry", {}).get("coordinates", [])
             longitude = coordinates[0] if coordinates and len(coordinates) > 0 else 0.0
             latitude = coordinates[1] if coordinates and len(coordinates) > 1 else 0.0
             
-            # Create SearchResult with all available data
-            search_result = SearchResult(
-                name=feature.get("name", ""),
-                address=feature.get("place_formatted", ""),
+            return SearchResult(
+                name=properties.get("name", ""),
+                address=properties.get("full_address", ""),
                 latitude=latitude,
                 longitude=longitude,
-                place_id=feature.get("mapbox_id"),
+                place_id=place_id,
                 source="mapbox",
-                additional_data=feature
+                additional_data=properties
             )
             
-            # Save to Firestore
-            try:
-                self.storage.save_place(search_result)
-            except Exception as e:
-                logger.error(f"Error saving place to Firestore: {str(e)}")
-            
-            # Cache the result for future use
-            self._search_results_cache[place_id] = search_result
-            
-            return search_result
-            
-        except Exception as e:
-            logger.error(f"Error in Mapbox retrieve: {str(e)}", exc_info=True)
-            raise 
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error retrieving place details from Mapbox: {str(e)}")
+            raise ValueError(f"Failed to retrieve place details: {str(e)}") 
