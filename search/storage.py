@@ -4,6 +4,7 @@ import logging
 import uuid
 import firebase_admin
 from firebase_admin import credentials, firestore
+from typing import Optional
 
 from search.base import SearchResult
 
@@ -158,6 +159,52 @@ class PlaceStorage:
             logger.error(f"Error processing Mapbox Place: {str(e)}")
             return f"dummy_id_{place.place_id}"
         
+    def _check_for_duplicate(self, place: SearchResult) -> Optional[str]:
+        """Check if a place already exists in the database.
+        Returns the existing place's ID if found, None otherwise."""
+        try:
+            if not hasattr(self, 'db'):
+                return None
+                
+            places_ref = self.db.collection('places')
+            
+            # First check by place_id if available
+            if place.place_id:
+                existing_places = places_ref.where('googlePlacesId', '==', place.place_id).get()
+                if existing_places:
+                    return existing_places[0].id
+                    
+                existing_places = places_ref.where('mapboxId', '==', place.place_id).get()
+                if existing_places:
+                    return existing_places[0].id
+            
+            # Then check by name and address combination
+            name_address_query = places_ref.where('name', '==', place.name).where('address', '==', place.address).get()
+            if name_address_query:
+                return name_address_query[0].id
+                
+            # Finally check by coordinates (within a small radius)
+            # This is useful for places that might have slightly different names/addresses
+            # but are at the same location
+            coordinate = firestore.GeoPoint(place.latitude, place.longitude)
+            # Search for places within roughly 50 meters (0.0005 degrees)
+            nearby_places = places_ref.where('coordinate', '>=', firestore.GeoPoint(
+                place.latitude - 0.0005,
+                place.longitude - 0.0005
+            )).where('coordinate', '<=', firestore.GeoPoint(
+                place.latitude + 0.0005,
+                place.longitude + 0.0005
+            )).get()
+            
+            if nearby_places:
+                return nearby_places[0].id
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error checking for duplicates: {str(e)}")
+            return None
+
     def save_place(self, place: SearchResult) -> str:
         """Save a place to Firestore based on its source."""
         print(f"\nProcessing place from source: {place.source}")
@@ -165,6 +212,12 @@ class PlaceStorage:
         print(f"Place ID: {place.place_id}")
         
         try:
+            # Check for existing place first
+            existing_id = self._check_for_duplicate(place)
+            if existing_id:
+                print(f"Place already exists with ID: {existing_id}")
+                return existing_id
+                
             if place.source in ['google', 'google_places']:
                 print("Saving Google Places data...")
                 place_id = self._save_google_place(place)
@@ -177,14 +230,6 @@ class PlaceStorage:
                 return place_id
             else:
                 logger.warning(f"Unknown source: {place.source}, skipping save")
-                # Even if we're not saving, still print the place details
-                print("\n=== Place Details ===")
-                print(f"Name: {place.name}")
-                print(f"Address: {place.address}")
-                print(f"Location: ({place.latitude}, {place.longitude})")
-                if place.additional_data:
-                    print("\nAdditional Data:")
-                    print(json.dumps(place.additional_data, indent=2, cls=FirestoreEncoder))
                 return f"dummy_id_{place.place_id}"
         except Exception as e:
             logger.error(f"Error saving place: {str(e)}")
