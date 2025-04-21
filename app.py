@@ -188,20 +188,17 @@ def get_place_details():
             
         # Get place details based on provider
         if provider == 'local':
-            # Search in local database
             if whoosh_provider is None:
                 return jsonify({"error": "Local search provider is not available"}), 503
-            results = whoosh_provider.search(place_id, limit=1)
-            if not results:
-                return jsonify({"error": "Place not found"}), 404
-            place = results[0]
+            try:
+                place = whoosh_provider.get_place_details(place_id)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 404
         elif provider == 'mapbox':
-            # Get details from Mapbox
             if mapbox_provider is None:
                 return jsonify({"error": "Mapbox search provider is not available"}), 503
             place = mapbox_provider.get_place_details(place_id)
         elif provider == 'google':
-            # Get details from Google Places
             if google_places_provider is None:
                 return jsonify({"error": "Google Places search provider is not available"}), 503
             place = google_places_provider.get_place_details(place_id)

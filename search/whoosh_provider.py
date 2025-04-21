@@ -15,6 +15,7 @@ class WhooshSearchProvider(SearchProvider):
         self.index_path = index_path
         logger.debug(f"Initializing WhooshSearchProvider with index path: {index_path}")
         self._ensure_index()
+        self.storage = PlaceStorage()
         
     def _ensure_index(self):
         if not os.path.exists(self.index_path):
@@ -62,22 +63,29 @@ class WhooshSearchProvider(SearchProvider):
             return search_results
 
     def get_place_details(self, place_id: str) -> SearchResult:
-        with self.ix.searcher() as searcher:
-            query = whoosh.qparser.QueryParser("place_id", self.ix.schema).parse(place_id)
-            results = searcher.search(query, limit=1)
+        try:
+            # Get the place document from Firestore
+            places_ref = self.storage.db.collection('places')
+            place_doc = places_ref.document(place_id).get()
             
-            if not results:
+            if not place_doc.exists:
                 raise ValueError(f"Place with ID {place_id} not found")
                 
-            result = results[0]
+            place_data = place_doc.to_dict()
+            coordinate = place_data.get('coordinate')
+            
             return SearchResult(
-                name=result["name"],
-                address=result.get("address", ""),
-                latitude=result.get("latitude", 0.0),
-                longitude=result.get("longitude", 0.0),
-                place_id=result["place_id"],
-                source="local"
+                name=place_data.get('name', ''),
+                address=place_data.get('address', ''),
+                latitude=coordinate.latitude if coordinate else 0.0,
+                longitude=coordinate.longitude if coordinate else 0.0,
+                place_id=place_id,
+                source='local',
+                additional_data=place_data
             )
+        except Exception as e:
+            logger.error(f"Error getting place from Firestore: {str(e)}")
+            raise
             
     def save_place(self, place: SearchResult) -> None:
         with self.ix.writer() as writer:
