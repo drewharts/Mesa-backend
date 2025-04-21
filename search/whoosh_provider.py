@@ -7,6 +7,7 @@ from whoosh.analysis import StandardAnalyzer
 from typing import List, Dict, Any, Optional
 
 from search.base import SearchProvider, SearchResult
+from search.storage import PlaceStorage
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,14 @@ class WhooshSearchProvider(SearchProvider):
             place_data = place_doc.to_dict()
             coordinate = place_data.get('coordinate')
             
+            # Convert additional_data to be JSON serializable
+            additional_data = place_data.copy()
+            if coordinate:
+                additional_data['coordinate'] = {
+                    'latitude': coordinate.latitude,
+                    'longitude': coordinate.longitude
+                }
+            
             return SearchResult(
                 name=place_data.get('name', ''),
                 address=place_data.get('address', ''),
@@ -81,7 +90,7 @@ class WhooshSearchProvider(SearchProvider):
                 longitude=coordinate.longitude if coordinate else 0.0,
                 place_id=place_id,
                 source='local',
-                additional_data=place_data
+                additional_data=additional_data
             )
         except Exception as e:
             logger.error(f"Error getting place from Firestore: {str(e)}")
