@@ -54,7 +54,7 @@ class GooglePlacesSearchProvider(SearchProvider):
                             latitude=place["geometry"]["location"]["lat"],
                             longitude=place["geometry"]["location"]["lng"],
                             place_id=place.get("place_id"),
-                            source="google_places"
+                            source="google"
                         )
                         
                         # Save to Firestore
