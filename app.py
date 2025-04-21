@@ -179,15 +179,15 @@ def search_suggestions():
 def get_place_details():
     try:
         place_id = request.args.get('place_id')
-        source = request.args.get('source')
+        provider = request.args.get('provider')
         
-        if not place_id or not source:
+        if not place_id or not provider:
             return jsonify({
-                "error": "place_id and source parameters are required"
+                "error": "place_id and provider parameters are required"
             }), 400
             
-        # Get place details based on source
-        if source == 'local':
+        # Get place details based on provider
+        if provider == 'local':
             # Search in local database
             if whoosh_provider is None:
                 return jsonify({"error": "Local search provider is not available"}), 503
@@ -195,23 +195,23 @@ def get_place_details():
             if not results:
                 return jsonify({"error": "Place not found"}), 404
             place = results[0]
-        elif source == 'mapbox':
+        elif provider == 'mapbox':
             # Get details from Mapbox
             if mapbox_provider is None:
                 return jsonify({"error": "Mapbox search provider is not available"}), 503
             place = mapbox_provider.get_place_details(place_id)
-        elif source == 'google':
+        elif provider == 'google':
             # Get details from Google Places
             if google_places_provider is None:
                 return jsonify({"error": "Google Places search provider is not available"}), 503
             place = google_places_provider.get_place_details(place_id)
         else:
             return jsonify({
-                "error": "Invalid source. Must be one of: local, mapbox, google"
+                "error": "Invalid provider. Must be one of: local, mapbox, google"
             }), 400
             
         # Save to local database if not already there
-        if source != 'local' and whoosh_provider is not None:
+        if provider != 'local' and whoosh_provider is not None:
             try:
                 # Save to Whoosh index
                 whoosh_provider.save_place(place)
@@ -237,7 +237,7 @@ def get_place_details():
                     "latitude": place.latitude,
                     "longitude": place.longitude
                 },
-                "source": place.source,
+                "provider": place.source,
                 "additional_data": place.additional_data
             }
         })
