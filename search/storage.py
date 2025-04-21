@@ -168,37 +168,21 @@ class PlaceStorage:
                 
             places_ref = self.db.collection('places')
             
-            # First check by place_id if available
+            # Only check by place_id if available
             if place.place_id:
-                existing_places = places_ref.where('googlePlacesId', '==', place.place_id).get()
-                if existing_places:
-                    return existing_places[0].id
-                    
-                existing_places = places_ref.where('mapboxId', '==', place.place_id).get()
-                if existing_places:
-                    return existing_places[0].id
-            
-            # Then check by name and address combination
-            name_address_query = places_ref.where('name', '==', place.name).where('address', '==', place.address).get()
-            if name_address_query:
-                return name_address_query[0].id
+                # Check for Google Places ID
+                if place.source in ['google', 'google_places']:
+                    existing_places = places_ref.where('googlePlacesId', '==', place.place_id).get()
+                    if existing_places:
+                        return existing_places[0].id
                 
-            # Finally check by coordinates (within a small radius)
-            # This is useful for places that might have slightly different names/addresses
-            # but are at the same location
-            coordinate = firestore.GeoPoint(place.latitude, place.longitude)
-            # Search for places within roughly 50 meters (0.0005 degrees)
-            nearby_places = places_ref.where('coordinate', '>=', firestore.GeoPoint(
-                place.latitude - 0.0005,
-                place.longitude - 0.0005
-            )).where('coordinate', '<=', firestore.GeoPoint(
-                place.latitude + 0.0005,
-                place.longitude + 0.0005
-            )).get()
+                # Check for Mapbox ID
+                elif place.source == 'mapbox':
+                    existing_places = places_ref.where('mapboxId', '==', place.place_id).get()
+                    if existing_places:
+                        return existing_places[0].id
             
-            if nearby_places:
-                return nearby_places[0].id
-                
+            # No match found
             return None
             
         except Exception as e:
