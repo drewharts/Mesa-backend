@@ -218,7 +218,7 @@ def get_place_details():
                     address=detail_place.address,
                     latitude=detail_place.coordinate.latitude,
                     longitude=detail_place.coordinate.longitude,
-                    place_id=detail_place.id,
+                    place_id=detail_place.mapbox_id if provider == 'mapbox' else detail_place.google_places_id,  # Use the correct provider-specific ID
                     source=provider
                 )
                 
@@ -229,20 +229,29 @@ def get_place_details():
                 # Save to Firestore using the DetailPlace object directly
                 try:
                     storage = PlaceStorage()
-                    # Check if place already exists in Firestore
-                    existing_id = storage._check_for_duplicate(search_result)
-                    if not existing_id:
-                        # Get Firestore connection from storage
-                        if hasattr(storage, 'db'):
-                            places_ref = storage.db.collection('places')
-                            # Use the DetailPlace to_firestore_dict method
-                            place_data = detail_place.to_firestore_dict()
-                            # Save to Firestore
-                            doc_ref = places_ref.add(place_data)
-                            firestore_id = doc_ref[1].id
-                            logger.info(f"Saved place to Firestore with ID: {firestore_id}")
+                    
+                    # Check if place already exists in Firestore - look up by provider-specific ID
+                    places_ref = storage.db.collection('places')
+                    
+                    # Check by Google Places ID or Mapbox ID based on the provider
+                    if provider == 'google' and detail_place.google_places_id:
+                        existing_places = places_ref.where('googlePlacesId', '==', detail_place.google_places_id).get()
+                    elif provider == 'mapbox' and detail_place.mapbox_id:
+                        existing_places = places_ref.where('mapboxId', '==', detail_place.mapbox_id).get()
                     else:
+                        existing_places = []
+                        
+                    if existing_places:
+                        # Place already exists
+                        existing_id = existing_places[0].id
                         logger.info(f"Place already exists in Firestore with ID: {existing_id}")
+                    else:
+                        # Place doesn't exist, save it
+                        # Use the DetailPlace to_firestore_dict method
+                        place_data = detail_place.to_firestore_dict()
+                        # Save to Firestore with a document ID matching the DetailPlace ID
+                        doc_ref = places_ref.document(detail_place.id).set(place_data)
+                        logger.info(f"Saved new place to Firestore with ID: {detail_place.id}")
                 except Exception as e:
                     logger.error(f"Error saving to Firestore: {str(e)}")
             except Exception as e:

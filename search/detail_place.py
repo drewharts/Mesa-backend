@@ -121,4 +121,60 @@ class DetailPlace:
             'servesDinner': self.serves_dinner,
             'instagram': self.instagram,
             'twitter': self.twitter
-        } 
+        }
+
+    @staticmethod
+    def create_with_deterministic_id(name: str, 
+                                  address: str, 
+                                  city: str = "",
+                                  mapbox_id: str = None,
+                                  google_places_id: str = None,
+                                  coordinate: firestore.GeoPoint = None,
+                                  categories: list = None,
+                                  phone: str = None,
+                                  rating: float = None,
+                                  open_hours: list = None,
+                                  description: str = None,
+                                  price_level: str = None,
+                                  reservable: bool = None,
+                                  serves_breakfast: bool = None,
+                                  serves_lunch: bool = None,
+                                  serves_dinner: bool = None,
+                                  instagram: str = None,
+                                  twitter: str = None) -> 'DetailPlace':
+        """Create a DetailPlace with a deterministic ID based on its source-specific ID."""
+        # Use the provider-specific ID if available, otherwise generate a random UUID
+        if google_places_id:
+            # Create a deterministic ID based on Google Places ID
+            id_base = f"google_{google_places_id}"
+        elif mapbox_id:
+            # Create a deterministic ID based on Mapbox ID
+            id_base = f"mapbox_{mapbox_id}"
+        else:
+            # Fallback to random UUID
+            id_base = str(uuid.uuid4())
+            
+        # Create a UUID based on the ID base - this ensures the same place always gets the same ID
+        deterministic_id = str(uuid.uuid5(uuid.NAMESPACE_URL, id_base)).upper()
+        
+        return DetailPlace(
+            id=deterministic_id,
+            name=name,
+            address=address,
+            city=city,
+            mapbox_id=mapbox_id,
+            google_places_id=google_places_id,
+            coordinate=coordinate,
+            categories=categories,
+            phone=phone,
+            rating=rating,
+            open_hours=open_hours,
+            description=description,
+            price_level=price_level,
+            reservable=reservable,
+            serves_breakfast=serves_breakfast,
+            serves_lunch=serves_lunch,
+            serves_dinner=serves_dinner,
+            instagram=instagram,
+            twitter=twitter
+        ) 
