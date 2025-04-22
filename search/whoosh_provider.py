@@ -6,6 +6,7 @@ import whoosh.qparser
 from whoosh.analysis import StandardAnalyzer
 from typing import List, Dict, Any, Optional
 import uuid
+from firebase_admin import firestore
 
 from search.base import SearchProvider, SearchResult
 from search.storage import PlaceStorage
@@ -115,8 +116,7 @@ class WhooshSearchProvider(SearchProvider):
                 city=place_data.get('city', ''),
                 mapbox_id=place_data.get('mapboxId'),
                 google_places_id=place_data.get('googlePlacesId'),
-                latitude=coordinate.latitude if coordinate else 0.0,
-                longitude=coordinate.longitude if coordinate else 0.0,
+                coordinate=coordinate,
                 categories=place_data.get('categories', []),
                 phone=place_data.get('phone'),
                 rating=place_data.get('rating'),

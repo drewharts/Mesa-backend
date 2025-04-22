@@ -2,6 +2,7 @@ import logging
 import googlemaps
 import uuid
 from typing import List, Dict, Any, Optional
+from firebase_admin import firestore
 
 from search.base import SearchProvider, SearchResult
 from search.storage import PlaceStorage
@@ -108,14 +109,17 @@ class GooglePlacesSearchProvider(SearchProvider):
                 elif "administrative_area_level_2" in component["types"] and not city:
                     city = component["long_name"]  # Fallback if locality is not present
 
+            # Create a GeoPoint from the coordinates
+            location = place["geometry"]["location"]
+            coordinate = firestore.GeoPoint(location["lat"], location["lng"])
+
             return DetailPlace(
                 id=str(uuid.uuid4()).upper(),
                 name=place.get("name", ""),
                 address=place.get("formatted_address", ""),
                 city=city,
                 google_places_id=place.get("place_id"),
-                latitude=place["geometry"]["location"]["lat"],
-                longitude=place["geometry"]["location"]["lng"],
+                coordinate=coordinate,  # Use GeoPoint instead of separate lat/lng
                 categories=place.get("types", []),
                 phone=place.get("formatted_phone_number"),
                 rating=place.get("rating"),
