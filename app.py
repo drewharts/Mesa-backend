@@ -8,7 +8,7 @@ from search import WhooshSearchProvider, MapboxSearchProvider, GooglePlacesSearc
 from search.storage import PlaceStorage
 import whoosh
 from whoosh.fields import Schema, TEXT, ID, STORED
-from whoosh.analysis import StandardAnalyzer
+from whoosh.analysis import StandardAnalyzer, StemmingAnalyzer, RegexTokenizer, LowercaseFilter, StopFilter, StemFilter
 from search.detail_place import DetailPlace
 from search.search_result import SearchResult
 
@@ -28,8 +28,21 @@ logger.info(f"Using Whoosh index directory: {whoosh_index_dir}")
 # Initialize search providers
 try:
     # Initialize Whoosh with schema
+    class CustomAnalyzer(StemmingAnalyzer):
+        def __init__(self):
+            # Create a tokenizer that splits on word boundaries
+            tokenizer = RegexTokenizer(r"\w+")
+            
+            # Create filters
+            lowercase = LowercaseFilter()
+            stop = StopFilter()
+            stemmer = StemFilter()
+            
+            # Chain the filters
+            self.chain = [tokenizer, lowercase, stop, stemmer]
+
     schema = Schema(
-        name=TEXT(stored=True, analyzer=StandardAnalyzer()),
+        name=TEXT(stored=True, analyzer=CustomAnalyzer()),
         place_id=ID(stored=True),
         address=STORED,
         latitude=STORED,
