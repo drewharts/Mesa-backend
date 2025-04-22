@@ -109,65 +109,45 @@ class MapboxSearchProvider(SearchProvider):
     def get_place_details(self, place_id: str) -> DetailPlace:
         # URL encode the place_id to handle special characters
         encoded_place_id = requests.utils.quote(place_id)
+        url = f"{self.base_url}/retrieve/{encoded_place_id}"
+        params = {
+            "access_token": self.access_token,
+            "session_token": self.cache.get_session_token() if hasattr(self, 'cache') else None
+        }
+        
+        # Remove None values from params
+        params = {k: v for k, v in params.items() if v is not None}
+        
+        logger.debug(f"Retrieving place details for ID: {place_id}")
+        logger.debug(f"Encoded URL: {url}")
+        logger.debug(f"Request params: {params}")
         
         try:
-            # Retrieve place details from Mapbox
-            url = f"https://api.mapbox.com/search/searchbox/v1/retrieve/{encoded_place_id}?access_token={self.access_token}"
-            response = requests.get(url)
+            response = requests.get(url, params=params)
+            logger.debug(f"Response status: {response.status_code}")
+            logger.debug(f"Response body: {response.text}")
             
-            # Raise an exception for HTTP errors
             response.raise_for_status()
-            
-            # Parse the response
             data = response.json()
             
-            # Check if we have features
-            if 'features' not in data or not data['features']:
-                raise ValueError(f"No place found for ID: {place_id}")
+            if not data or "features" not in data or not data["features"]:
+                raise ValueError(f"Place with ID {place_id} not found")
                 
-            # Get the first feature
-            feature = data['features'][0]
+            feature = data["features"][0]
+            properties = feature.get("properties", {})
             
-            # Extract properties
-            properties = feature.get('properties', {})
+            # Mapbox returns coordinates as [longitude, latitude]
+            coordinates = feature.get("geometry", {}).get("coordinates", [])
+            longitude = coordinates[0] if coordinates and len(coordinates) > 0 else 0.0
+            latitude = coordinates[1] if coordinates and len(coordinates) > 1 else 0.0
             
-            # Extract coordinates
-            geometry = feature.get('geometry', {})
-            coordinates = geometry.get('coordinates', [0, 0])
-            longitude, latitude = coordinates
-            
-            # Create a GeoPoint
+            # Create a GeoPoint from the coordinates
             coordinate = firestore.GeoPoint(latitude, longitude)
             
-            # Extract address components
-            context = properties.get('context', {})
-            city = context.get('locality', {}).get('name', context.get('place', {}).get('name', ''))
-            
-            # Extract neighborhood
-            neighborhood = context.get('neighborhood', {}).get('name', '')
-            
-            # Extract address
-            full_address = properties.get('full_address', '')
-            if not full_address:
-                address_parts = []
-                
-                if properties.get('address', ''):
-                    address_parts.append(properties.get('address', ''))
-                
-                if city:
-                    address_parts.append(city)
-                
-                if context.get('region', {}).get('name', ''):
-                    address_parts.append(context.get('region', {}).get('name', ''))
-                
-                if context.get('country', {}).get('name', ''):
-                    address_parts.append(context.get('country', {}).get('name', ''))
-                
-                if context.get('postcode', {}).get('name', ''):
-                    address_parts.append(context.get('postcode', {}).get('name', ''))
-                
-                full_address = ', '.join([part for part in address_parts if part])
-            
+            # Extract context information
+            context = properties.get("context", {})
+            city = context.get("place", {}).get("name", "")
+            neighborhood = context.get("neighborhood", {}).get("name", "")
             region = context.get("region", {}).get("name", "")
             country = context.get("country", {}).get("name", "")
             postal_code = context.get("postcode", {}).get("name", "")
@@ -196,7 +176,7 @@ class MapboxSearchProvider(SearchProvider):
                 name=properties.get("name", ""),
                 address=properties.get("full_address", ""),
                 city=city,
-                mapbox_id=place_id,  # Use the original place_id passed to the method
+                mapbox_id=place_id,
                 coordinate=coordinate,  # Use GeoPoint instead of separate lat/lng
                 categories=all_categories,
                 phone=properties.get("phone"),
