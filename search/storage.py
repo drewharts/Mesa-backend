@@ -137,7 +137,13 @@ class PlaceStorage:
                 'X': additional_data.get('twitter')
             }
             
-            return place_data['id']
+            # Save to Firestore
+            if hasattr(self, 'db'):
+                places_ref = self.db.collection('places')
+                doc_ref = places_ref.add(place_data)
+                return doc_ref[1].id
+            else:
+                return place_data['id']
             
         except Exception as e:
             logger.error(f"Error processing Mapbox Place: {str(e)}")
