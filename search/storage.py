@@ -158,7 +158,7 @@ class PlaceStorage:
                 
             places_ref = self.db.collection('places')
             
-            # First check by place_id if available
+            # Only check by place_id if available
             if place.place_id:
                 # Check for Google Places ID
                 if place.source in ['google', 'google_places']:
@@ -171,28 +171,6 @@ class PlaceStorage:
                     existing_places = places_ref.where('mapboxId', '==', place.place_id).get()
                     if existing_places:
                         return existing_places[0].id
-            
-            # If no match by ID, check by name and address
-            # Normalize the name and address for comparison
-            normalized_name = place.name.lower().strip()
-            normalized_address = place.address.lower().strip()
-            
-            # Query for places with matching name and address
-            existing_places = places_ref.where('name', '==', normalized_name).where('address', '==', normalized_address).get()
-            
-            if existing_places:
-                # If we found a match, update the other ID field if it's empty
-                existing_doc = existing_places[0]
-                existing_data = existing_doc.to_dict()
-                
-                # If this is a Google Places result and the existing doc has no Google Places ID
-                if place.source in ['google', 'google_places'] and not existing_data.get('googlePlacesId'):
-                    existing_doc.reference.update({'googlePlacesId': place.place_id})
-                # If this is a Mapbox result and the existing doc has no Mapbox ID
-                elif place.source == 'mapbox' and not existing_data.get('mapboxId'):
-                    existing_doc.reference.update({'mapboxId': place.place_id})
-                
-                return existing_doc.id
             
             # No match found
             return None
