@@ -149,6 +149,12 @@ class PlaceStorage:
             logger.error(f"Error processing Mapbox Place: {str(e)}")
             return f"dummy_id_{place.place_id}"
         
+    def _normalize_string(self, s: str) -> str:
+        """Normalize a string for comparison by removing extra spaces and converting to lowercase."""
+        if not s:
+            return ""
+        return " ".join(s.lower().split())
+
     def _check_for_duplicate(self, place: SearchResult) -> Optional[str]:
         """Check if a place already exists in the database.
         Returns the existing place's ID if found, None otherwise."""
@@ -158,7 +164,7 @@ class PlaceStorage:
                 
             places_ref = self.db.collection('places')
             
-            # Only check by place_id if available
+            # First check by place_id if available
             if place.place_id:
                 # Check for Google Places ID
                 if place.source in ['google', 'google_places']:
@@ -171,6 +177,23 @@ class PlaceStorage:
                     existing_places = places_ref.where('mapboxId', '==', place.place_id).get()
                     if existing_places:
                         return existing_places[0].id
+            
+            # If no match by ID, check by name and address
+            normalized_name = self._normalize_string(place.name)
+            normalized_address = self._normalize_string(place.address)
+            
+            # Get all places with the same name
+            places_with_same_name = places_ref.where('name', '==', place.name).get()
+            
+            # Check each place with the same name for matching address
+            for doc in places_with_same_name:
+                doc_data = doc.to_dict()
+                doc_address = self._normalize_string(doc_data.get('address', ''))
+                
+                # If both name and address match, it's a duplicate
+                if doc_address == normalized_address:
+                    logger.info(f"Found duplicate place by name and address: {place.name}")
+                    return doc.id
             
             # No match found
             return None
