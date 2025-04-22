@@ -3,7 +3,6 @@ import googlemaps
 import uuid
 from typing import List, Dict, Any, Optional
 from firebase_admin import firestore
-import requests
 
 from search.base import SearchProvider, SearchResult
 from search.storage import PlaceStorage
@@ -76,48 +75,50 @@ class GooglePlacesSearchProvider(SearchProvider):
             return []
 
     def get_place_details(self, place_id: str) -> DetailPlace:
-        """Get detailed information about a specific place."""
         try:
-            place_url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=name,place_id,formatted_address,geometry,types,rating,formatted_phone_number,opening_hours,price_level&key={self.api_key}"
+            place_details = self.client.place(
+                place_id,
+                fields=[
+                    "name",
+                    "formatted_address",
+                    "geometry",
+                    "place_id",
+                    "type",
+                    "rating",
+                    "formatted_phone_number",
+                    "opening_hours",
+                    "price_level",
+                    "website",
+                    "business_status",
+                    "address_component"
+                ]
+            )
             
-            response = requests.get(place_url)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if data.get("status") != "OK":
-                logger.error(f"Error getting place details from Google: {data.get('status')}")
-                raise ValueError(f"Failed to get place details: {data.get('status')}")
+            if "result" not in place_details:
+                raise ValueError(f"Place with ID {place_id} not found")
                 
-            place = data.get("result", {})
+            place = place_details["result"]
             
-            if not place:
-                raise ValueError("Place details not found")
-                
-            # Extract location
-            geometry = place.get("geometry", {})
-            location = geometry.get("location", {})
-            lat = location.get("lat", 0)
-            lng = location.get("lng", 0)
-            
-            coordinate = firestore.GeoPoint(lat, lng)
-            
-            # Extract city information from formatted address
+            # Extract city from address_components
             city = ""
-            formatted_address = place.get("formatted_address", "")
-            if formatted_address:
-                parts = formatted_address.split(',')
-                if len(parts) > 1:
-                    city_parts = parts[1].strip().split()
-                    if city_parts:
-                        city = city_parts[0]
+            address_components = place.get("address_components", [])
+            for component in address_components:
+                if "locality" in component["types"]:
+                    city = component["long_name"]
+                    break
+                elif "administrative_area_level_2" in component["types"] and not city:
+                    city = component["long_name"]  # Fallback if locality is not present
+
+            # Create a GeoPoint from the coordinates
+            location = place["geometry"]["location"]
+            coordinate = firestore.GeoPoint(location["lat"], location["lng"])
 
             return DetailPlace(
                 id=str(uuid.uuid4()).upper(),
                 name=place.get("name", ""),
                 address=place.get("formatted_address", ""),
                 city=city,
-                google_places_id=place_id,  # Use the original place_id passed to the method
+                google_places_id=place.get("place_id"),
                 coordinate=coordinate,  # Use GeoPoint instead of separate lat/lng
                 categories=place.get("types", []),
                 phone=place.get("formatted_phone_number"),
