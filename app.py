@@ -212,7 +212,7 @@ def get_place_details():
         # Save to local database if not already there
         if provider != 'local' and whoosh_provider is not None:
             try:
-                # Convert DetailPlace to SearchResult for saving
+                # Convert DetailPlace to SearchResult for saving to Whoosh only
                 search_result = SearchResult(
                     name=detail_place.name,
                     address=detail_place.address,
@@ -226,11 +226,23 @@ def get_place_details():
                 whoosh_provider.save_place(search_result)
                 logger.info(f"Saved place to Whoosh index: {detail_place.name}")
                 
-                # Save to Firestore
+                # Save to Firestore using the DetailPlace object directly
                 try:
                     storage = PlaceStorage()
-                    firestore_id = storage.save_place(search_result)
-                    logger.info(f"Saved place to Firestore with ID: {firestore_id}")
+                    # Check if place already exists in Firestore
+                    existing_id = storage._check_for_duplicate(search_result)
+                    if not existing_id:
+                        # Get Firestore connection from storage
+                        if hasattr(storage, 'db'):
+                            places_ref = storage.db.collection('places')
+                            # Use the DetailPlace to_firestore_dict method
+                            place_data = detail_place.to_firestore_dict()
+                            # Save to Firestore
+                            doc_ref = places_ref.add(place_data)
+                            firestore_id = doc_ref[1].id
+                            logger.info(f"Saved place to Firestore with ID: {firestore_id}")
+                    else:
+                        logger.info(f"Place already exists in Firestore with ID: {existing_id}")
                 except Exception as e:
                     logger.error(f"Error saving to Firestore: {str(e)}")
             except Exception as e:
