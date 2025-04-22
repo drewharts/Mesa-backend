@@ -187,8 +187,56 @@ def get_place_details():
             return jsonify({
                 "error": "place_id and provider parameters are required"
             }), 400
+        
+        # Initialize storage for later use
+        storage = PlaceStorage()
+        
+        # First check if we already have this place in our database
+        existing_place_id = None
+        existing_detail_place = None
+        
+        # Only check if storage is available
+        if hasattr(storage, 'db') and storage.db:
+            places_ref = storage.db.collection('places')
             
-        # Get place details based on provider
+            # Check for existing place by provider ID
+            if provider == 'google':
+                query = places_ref.where('googlePlacesId', '==', place_id).limit(1).get()
+                if query and len(query) > 0:
+                    existing_place_id = query[0].id
+                    existing_place_data = query[0].to_dict()
+                    logger.info(f"Found existing place in Firestore with ID: {existing_place_id}")
+                    
+                    # If we already have this place, create a DetailPlace from it
+                    if whoosh_provider is not None:
+                        try:
+                            existing_detail_place = whoosh_provider.get_place_details(existing_place_id)
+                            logger.info(f"Using existing place: {existing_detail_place.name}")
+                        except Exception as e:
+                            logger.error(f"Error getting existing place details: {str(e)}")
+            
+            elif provider == 'mapbox':
+                query = places_ref.where('mapboxId', '==', place_id).limit(1).get()
+                if query and len(query) > 0:
+                    existing_place_id = query[0].id
+                    existing_place_data = query[0].to_dict()
+                    logger.info(f"Found existing place in Firestore with ID: {existing_place_id}")
+                    
+                    # If we already have this place, create a DetailPlace from it
+                    if whoosh_provider is not None:
+                        try:
+                            existing_detail_place = whoosh_provider.get_place_details(existing_place_id)
+                            logger.info(f"Using existing place: {existing_detail_place.name}")
+                        except Exception as e:
+                            logger.error(f"Error getting existing place details: {str(e)}")
+            
+        # If we found an existing place, return it directly
+        if existing_detail_place:
+            return jsonify({
+                "place": existing_detail_place.to_dict()
+            })
+        
+        # Otherwise, get place details based on provider
         if provider == 'local':
             if whoosh_provider is None:
                 return jsonify({"error": "Local search provider is not available"}), 503
@@ -200,16 +248,20 @@ def get_place_details():
             if mapbox_provider is None:
                 return jsonify({"error": "Mapbox search provider is not available"}), 503
             detail_place = mapbox_provider.get_place_details(place_id)
+            # Ensure we use the original mapbox ID
+            detail_place.mapbox_id = place_id
         elif provider == 'google':
             if google_places_provider is None:
                 return jsonify({"error": "Google Places search provider is not available"}), 503
             detail_place = google_places_provider.get_place_details(place_id)
+            # Ensure we use the original google ID
+            detail_place.google_places_id = place_id
         else:
             return jsonify({
                 "error": "Invalid provider. Must be one of: local, mapbox, google"
             }), 400
             
-        # Save to local database if not already there
+        # Save to local database if not already there and not from local provider
         if provider != 'local' and whoosh_provider is not None:
             try:
                 # Convert DetailPlace to SearchResult for saving to Whoosh only
@@ -218,7 +270,7 @@ def get_place_details():
                     address=detail_place.address,
                     latitude=detail_place.coordinate.latitude,
                     longitude=detail_place.coordinate.longitude,
-                    place_id=detail_place.mapbox_id if provider == 'mapbox' else detail_place.google_places_id,  # Use the correct provider-specific ID
+                    place_id=detail_place.id,
                     source=provider
                 )
                 
@@ -228,30 +280,11 @@ def get_place_details():
                 
                 # Save to Firestore using the DetailPlace object directly
                 try:
-                    storage = PlaceStorage()
-                    
-                    # Check if place already exists in Firestore - look up by provider-specific ID
-                    places_ref = storage.db.collection('places')
-                    
-                    # Check by Google Places ID or Mapbox ID based on the provider
-                    if provider == 'google' and detail_place.google_places_id:
-                        existing_places = places_ref.where('googlePlacesId', '==', detail_place.google_places_id).get()
-                    elif provider == 'mapbox' and detail_place.mapbox_id:
-                        existing_places = places_ref.where('mapboxId', '==', detail_place.mapbox_id).get()
-                    else:
-                        existing_places = []
-                        
-                    if existing_places:
-                        # Place already exists
-                        existing_id = existing_places[0].id
-                        logger.info(f"Place already exists in Firestore with ID: {existing_id}")
-                    else:
-                        # Place doesn't exist, save it
-                        # Use the DetailPlace to_firestore_dict method
-                        place_data = detail_place.to_firestore_dict()
-                        # Save to Firestore with a document ID matching the DetailPlace ID
-                        doc_ref = places_ref.document(detail_place.id).set(place_data)
-                        logger.info(f"Saved new place to Firestore with ID: {detail_place.id}")
+                    # We already initialized storage above
+                    # Use the new save_detail_place method to save directly
+                    if hasattr(storage, 'db'):
+                        firestore_id = storage.save_detail_place(detail_place)
+                        logger.info(f"Place saved/found in Firestore with ID: {firestore_id}")
                 except Exception as e:
                     logger.error(f"Error saving to Firestore: {str(e)}")
             except Exception as e:
