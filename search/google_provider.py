@@ -33,8 +33,6 @@ class GooglePlacesSearchProvider(SearchProvider):
                 session_token=session_token
             )
             
-            logger.debug(f"Google Places response: {response}")
-            
             results = []
             for prediction in response[:limit]:
                 # Get place details for each prediction
@@ -64,7 +62,6 @@ class GooglePlacesSearchProvider(SearchProvider):
                             logger.error(f"Error saving place to Firestore: {str(e)}")
                             
                         results.append(search_result)
-                        logger.debug(f"Google Places result: {search_result.name} at {search_result.address}")
             
             # Cache the results
             self.cache.set(query, latitude, longitude, results)

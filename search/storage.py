@@ -96,26 +96,16 @@ class PlaceStorage:
                 'X': None                 # Not provided by Google Places
             }
             
-            # Print the data structure
-            print("\n=== Google Places Data Structure ===")
-            print(json.dumps(place_data, indent=2, cls=FirestoreEncoder))
-            print("\n=== Original Additional Data ===")
-            print(json.dumps(additional_data, indent=2, cls=FirestoreEncoder))
-            
             # Save to Firestore
             if hasattr(self, 'db'):
-                print("Saving to Firestore...")
                 places_ref = self.db.collection('places')
                 doc_ref = places_ref.add(place_data)
-                print(f"Successfully saved to Firestore with ID: {doc_ref[1].id}")
                 return doc_ref[1].id
             else:
-                print("Firestore client not initialized, skipping save")
                 return place_data['id']
                 
         except Exception as e:
             logger.error(f"Error processing Google Place: {str(e)}")
-            print(f"Error processing Google Place: {str(e)}")
             return f"dummy_id_{place.place_id}"
 
     def _save_mapbox_place(self, place: SearchResult) -> str:
@@ -146,12 +136,6 @@ class PlaceStorage:
                 'Instagram': additional_data.get('instagram'),
                 'X': additional_data.get('twitter')
             }
-            
-            # Print the data structure
-            print("\n=== Mapbox Data Structure ===")
-            print(json.dumps(place_data, indent=2, cls=FirestoreEncoder))
-            print("\n=== Original Additional Data ===")
-            print(json.dumps(additional_data, indent=2, cls=FirestoreEncoder))
             
             return place_data['id']
             
@@ -191,33 +175,23 @@ class PlaceStorage:
 
     def save_place(self, place: SearchResult) -> str:
         """Save a place to Firestore based on its source."""
-        print(f"\nProcessing place from source: {place.source}")
-        print(f"Place name: {place.name}")
-        print(f"Place ID: {place.place_id}")
-        
         try:
             # Check for existing place first
             existing_id = self._check_for_duplicate(place)
             if existing_id:
-                print(f"Place already exists with ID: {existing_id}")
                 return existing_id
                 
             if place.source in ['google', 'google_places']:
-                print("Saving Google Places data...")
                 place_id = self._save_google_place(place)
-                print(f"Successfully saved Google Places data with ID: {place_id}")
                 return place_id
             elif place.source == 'mapbox':
-                print("Saving Mapbox data...")
                 place_id = self._save_mapbox_place(place)
-                print(f"Successfully saved Mapbox data with ID: {place_id}")
                 return place_id
             else:
                 logger.warning(f"Unknown source: {place.source}, skipping save")
                 return f"dummy_id_{place.place_id}"
         except Exception as e:
             logger.error(f"Error saving place: {str(e)}")
-            print(f"Error saving place: {str(e)}")
             return f"dummy_id_{place.place_id}"
         
         # # Check if place already exists
@@ -245,4 +219,4 @@ class PlaceStorage:
             
         # # Save to Firestore
         # doc_ref = places_ref.add(place_data)
-        # return doc_ref[1].id  # Return the document ID 
+        # return doc_ref[1].id 
