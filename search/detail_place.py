@@ -85,15 +85,15 @@ class DetailPlace:
             'categories': self.categories,
             'phone': self.phone,
             'rating': self.rating,
-            'OpenHours': self.open_hours,
+            'openHours': self.open_hours,
             'description': self.description,
             'priceLevel': self.price_level,
             'reservable': self.reservable,
             'servesBreakfast': self.serves_breakfast,
-            'serversLunch': self.serves_lunch,
-            'serversDinner': self.serves_dinner,
-            'Instagram': self.instagram,
-            'X': self.twitter
+            'servesLunch': self.serves_lunch,
+            'servesDinner': self.serves_dinner,
+            'instagram': self.instagram,
+            'twitter': self.twitter
         }
 
     def to_dict(self) -> dict:

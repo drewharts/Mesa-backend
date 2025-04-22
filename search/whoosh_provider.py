@@ -120,15 +120,15 @@ class WhooshSearchProvider(SearchProvider):
                 categories=place_data.get('categories', []),
                 phone=place_data.get('phone'),
                 rating=place_data.get('rating'),
-                open_hours=place_data.get('OpenHours', []),
+                open_hours=place_data.get('openHours', []),
                 description=place_data.get('description'),
                 price_level=place_data.get('priceLevel'),
                 reservable=place_data.get('reservable'),
                 serves_breakfast=place_data.get('servesBreakfast'),
                 serves_lunch=place_data.get('servesLunch'),
                 serves_dinner=place_data.get('servesDinner'),
-                instagram=place_data.get('Instagram'),
-                twitter=place_data.get('X')
+                instagram=place_data.get('instagram'),
+                twitter=place_data.get('twitter')
             )
         except Exception as e:
             logger.error(f"Error getting place from Firestore: {str(e)}")

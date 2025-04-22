@@ -85,15 +85,15 @@ class PlaceStorage:
                 'categories': additional_data.get('types'),  # Google Places uses 'types' for categories
                 'phone': additional_data.get('formatted_phone_number'),
                 'rating': additional_data.get('rating'),
-                'OpenHours': additional_data.get('opening_hours', {}).get('weekday_text'),
+                'openHours': additional_data.get('opening_hours', {}).get('weekday_text'),
                 'description': additional_data.get('formatted_address'),
                 'priceLevel': str(additional_data.get('price_level')) if additional_data.get('price_level') is not None else None,
                 'reservable': additional_data.get('reservable'),
                 'servesBreakfast': None,  # Not provided by Google Places
-                'serversLunch': None,     # Not provided by Google Places
-                'serversDinner': None,    # Not provided by Google Places
-                'Instagram': None,        # Not provided by Google Places
-                'X': None                 # Not provided by Google Places
+                'servesLunch': None,     # Not provided by Google Places
+                'servesDinner': None,    # Not provided by Google Places
+                'instagram': None,        # Not provided by Google Places
+                'twitter': None           # Not provided by Google Places
             }
             
             # Save to Firestore
@@ -126,15 +126,15 @@ class PlaceStorage:
                 'categories': additional_data.get('categories'),
                 'phone': additional_data.get('phone'),
                 'rating': additional_data.get('rating'),
-                'OpenHours': additional_data.get('openHours'),
+                'openHours': additional_data.get('openHours'),
                 'description': additional_data.get('description'),
                 'priceLevel': additional_data.get('priceLevel'),
                 'reservable': additional_data.get('reservable'),
                 'servesBreakfast': additional_data.get('servesBreakfast'),
-                'serversLunch': additional_data.get('servesLunch'),
-                'serversDinner': additional_data.get('servesDinner'),
-                'Instagram': additional_data.get('instagram'),
-                'X': additional_data.get('twitter')
+                'servesLunch': additional_data.get('servesLunch'),
+                'servesDinner': additional_data.get('servesDinner'),
+                'instagram': additional_data.get('instagram'),
+                'twitter': additional_data.get('twitter')
             }
             
             # Save to Firestore
