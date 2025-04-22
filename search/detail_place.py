@@ -12,8 +12,7 @@ class DetailPlace:
                  city: str = "",
                  mapbox_id: str = None,
                  google_places_id: str = None,
-                 latitude: float = 0.0,
-                 longitude: float = 0.0,
+                 coordinate: firestore.GeoPoint = None,
                  categories: list = None,
                  phone: str = None,
                  rating: float = None,
@@ -32,8 +31,7 @@ class DetailPlace:
         self.city = city
         self.mapbox_id = mapbox_id
         self.google_places_id = google_places_id
-        self.latitude = latitude
-        self.longitude = longitude
+        self.coordinate = coordinate or firestore.GeoPoint(0.0, 0.0)
         self.categories = categories or []
         self.phone = phone
         self.rating = rating
@@ -59,8 +57,7 @@ class DetailPlace:
             city=additional_data.get('city', ""),
             mapbox_id=search_result.place_id if source == 'mapbox' else None,
             google_places_id=search_result.place_id if source == 'google' else None,
-            latitude=search_result.latitude,
-            longitude=search_result.longitude,
+            coordinate=firestore.GeoPoint(search_result.latitude, search_result.longitude),
             categories=additional_data.get('categories', []) or additional_data.get('types', []),
             phone=additional_data.get('phone') or additional_data.get('formatted_phone_number'),
             rating=additional_data.get('rating'),
@@ -84,7 +81,7 @@ class DetailPlace:
             'city': self.city,
             'mapboxId': self.mapbox_id,
             'googlePlacesId': self.google_places_id,
-            'coordinate': firestore.GeoPoint(self.latitude, self.longitude),
+            'coordinate': self.coordinate,
             'categories': self.categories,
             'phone': self.phone,
             'rating': self.rating,
@@ -109,8 +106,8 @@ class DetailPlace:
             'mapboxId': self.mapbox_id,
             'googlePlacesId': self.google_places_id,
             'location': {
-                'latitude': self.latitude,
-                'longitude': self.longitude
+                'latitude': self.coordinate.latitude,
+                'longitude': self.coordinate.longitude
             },
             'categories': self.categories,
             'phone': self.phone,

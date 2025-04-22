@@ -216,8 +216,8 @@ def get_place_details():
                 search_result = SearchResult(
                     name=detail_place.name,
                     address=detail_place.address,
-                    latitude=detail_place.latitude,
-                    longitude=detail_place.longitude,
+                    latitude=detail_place.coordinate.latitude,
+                    longitude=detail_place.coordinate.longitude,
                     place_id=detail_place.id,
                     source=provider
                 )

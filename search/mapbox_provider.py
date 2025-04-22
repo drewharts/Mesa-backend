@@ -3,6 +3,7 @@ import requests
 import uuid
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
+from firebase_admin import firestore
 
 from search.base import SearchProvider, SearchResult
 from search.storage import PlaceStorage
@@ -140,6 +141,9 @@ class MapboxSearchProvider(SearchProvider):
             longitude = coordinates[0] if coordinates and len(coordinates) > 0 else 0.0
             latitude = coordinates[1] if coordinates and len(coordinates) > 1 else 0.0
             
+            # Create a GeoPoint from the coordinates
+            coordinate = firestore.GeoPoint(latitude, longitude)
+            
             # Extract context information
             context = properties.get("context", {})
             city = context.get("place", {}).get("name", "")
@@ -173,8 +177,7 @@ class MapboxSearchProvider(SearchProvider):
                 address=properties.get("full_address", ""),
                 city=city,
                 mapbox_id=place_id,
-                latitude=latitude,
-                longitude=longitude,
+                coordinate=coordinate,  # Use GeoPoint instead of separate lat/lng
                 categories=all_categories,
                 phone=properties.get("phone"),
                 rating=properties.get("rating"),
