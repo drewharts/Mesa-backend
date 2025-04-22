@@ -1,11 +1,13 @@
 import logging
 import requests
+import uuid
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
 from search.base import SearchProvider, SearchResult
 from search.storage import PlaceStorage
 from search.cache import PlacesCache
+from search.detail_place import DetailPlace
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +105,7 @@ class MapboxSearchProvider(SearchProvider):
             logger.error(f"Error in Mapbox search: {str(e)}", exc_info=True)
             return []
 
-    def get_place_details(self, place_id: str) -> SearchResult:
+    def get_place_details(self, place_id: str) -> DetailPlace:
         # URL encode the place_id to handle special characters
         encoded_place_id = requests.utils.quote(place_id)
         url = f"{self.base_url}/retrieve/{encoded_place_id}"
@@ -138,14 +140,26 @@ class MapboxSearchProvider(SearchProvider):
             longitude = coordinates[0] if coordinates and len(coordinates) > 0 else 0.0
             latitude = coordinates[1] if coordinates and len(coordinates) > 1 else 0.0
             
-            return SearchResult(
+            return DetailPlace(
+                id=str(uuid.uuid4()).upper(),
                 name=properties.get("name", ""),
                 address=properties.get("full_address", ""),
+                city=properties.get("city", ""),
+                mapbox_id=place_id,
                 latitude=latitude,
                 longitude=longitude,
-                place_id=place_id,
-                source="mapbox",
-                additional_data=properties
+                categories=properties.get("categories", []),
+                phone=properties.get("phone"),
+                rating=properties.get("rating"),
+                open_hours=properties.get("openHours", []),
+                description=properties.get("description"),
+                price_level=properties.get("priceLevel"),
+                reservable=properties.get("reservable"),
+                serves_breakfast=properties.get("servesBreakfast"),
+                serves_lunch=properties.get("servesLunch"),
+                serves_dinner=properties.get("servesDinner"),
+                instagram=properties.get("instagram"),
+                twitter=properties.get("twitter")
             )
             
         except requests.exceptions.RequestException as e:

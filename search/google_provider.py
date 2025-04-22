@@ -1,10 +1,12 @@
 import logging
 import googlemaps
+import uuid
 from typing import List, Dict, Any, Optional
 
 from search.base import SearchProvider, SearchResult
 from search.storage import PlaceStorage
 from search.cache import PlacesCache
+from search.detail_place import DetailPlace
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,7 @@ class GooglePlacesSearchProvider(SearchProvider):
             logger.error(f"Error in Google Places search: {str(e)}")
             return []
 
-    def get_place_details(self, place_id: str) -> SearchResult:
+    def get_place_details(self, place_id: str) -> DetailPlace:
         try:
             place_details = self.client.place(
                 place_id,
@@ -106,18 +108,26 @@ class GooglePlacesSearchProvider(SearchProvider):
                 elif "administrative_area_level_2" in component["types"] and not city:
                     city = component["long_name"]  # Fallback if locality is not present
 
-            # Add city to the place data for additional_data
-            if city:
-                place["city"] = city
-
-            return SearchResult(
+            return DetailPlace(
+                id=str(uuid.uuid4()).upper(),
                 name=place.get("name", ""),
                 address=place.get("formatted_address", ""),
+                city=city,
+                google_places_id=place.get("place_id"),
                 latitude=place["geometry"]["location"]["lat"],
                 longitude=place["geometry"]["location"]["lng"],
-                place_id=place.get("place_id"),
-                source="google",
-                additional_data=place
+                categories=place.get("types", []),
+                phone=place.get("formatted_phone_number"),
+                rating=place.get("rating"),
+                open_hours=place.get("opening_hours", {}).get("weekday_text", []),
+                description=place.get("formatted_address"),
+                price_level=str(place.get("price_level")) if place.get("price_level") is not None else None,
+                reservable=None,  # Not provided by Google Places
+                serves_breakfast=None,  # Not provided by Google Places
+                serves_lunch=None,  # Not provided by Google Places
+                serves_dinner=None,  # Not provided by Google Places
+                instagram=None,  # Not provided by Google Places
+                twitter=None  # Not provided by Google Places
             )
         except Exception as e:
             logger.error(f"Error getting Google Places details: {str(e)}")
