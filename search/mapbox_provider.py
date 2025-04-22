@@ -34,16 +34,10 @@ class MapboxSearchProvider(SearchProvider):
         # Remove None values from params
         params = {k: v for k, v in params.items() if v is not None}
         
-        logger.debug(f"Mapbox search params: {params}")
         url = f"{self.base_url}/suggest"
-        logger.debug(f"Mapbox API URL: {url}")
         
         try:
             response = requests.get(url, params=params)
-            logger.debug(f"Mapbox API Response Status: {response.status_code}")
-            logger.debug(f"Mapbox API Response Headers: {response.headers}")
-            logger.debug(f"Mapbox API URL: {url}")
-            logger.debug(f"Mapbox API Params: {params}")
             
             if response.status_code != 200:
                 logger.error(f"Mapbox API Error: {response.text}")
@@ -52,28 +46,15 @@ class MapboxSearchProvider(SearchProvider):
             response.raise_for_status()
             data = response.json()
             
-            logger.debug(f"Mapbox response data: {data}")
-            
-            # Log the first suggestion's structure for debugging
-            if data.get("suggestions"):
-                first_suggestion = data["suggestions"][0]
-                logger.debug(f"First suggestion structure: {first_suggestion}")
-                if "point" in first_suggestion:
-                    logger.debug(f"Point data: {first_suggestion['point']}")
-            
             # Use a dictionary to track unique results by mapbox_id and name+address combination
             unique_results = {}
-            seen_places = set()  # Track unique name+address combinations
+            seen_places = set()
             
             for suggestion in data.get("suggestions", []):
                 # Get the mapbox_id first to check for duplicates
                 mapbox_id = suggestion.get("mapbox_id")
                 if not mapbox_id:
                     continue
-                
-                # Log the raw suggestion and mapbox_id for debugging
-                logger.debug(f"Raw suggestion: {suggestion}")
-                logger.debug(f"Mapbox ID from suggestion: {mapbox_id}")
                 
                 # Get the name and full address
                 name = suggestion.get("name", "")
@@ -92,9 +73,6 @@ class MapboxSearchProvider(SearchProvider):
                 # Mapbox returns coordinates as [longitude, latitude]
                 longitude = coordinates[0] if coordinates and len(coordinates) > 0 else 0.0
                 latitude = coordinates[1] if coordinates and len(coordinates) > 1 else 0.0
-                
-                # Log the coordinates for debugging
-                logger.debug(f"Extracted coordinates for {name}: lat={latitude}, lng={longitude}")
                 
                 search_result = SearchResult(
                     name=name,
@@ -115,12 +93,10 @@ class MapboxSearchProvider(SearchProvider):
                 # Add to unique results and seen places
                 unique_results[mapbox_id] = search_result
                 seen_places.add(place_key)
-                logger.debug(f"Mapbox result: {search_result.name} at {search_result.address}")
             
             # Convert dictionary values to list
             results = list(unique_results.values())
             
-            logger.debug(f"Total Mapbox results found: {len(results)}")
             return results
             
         except Exception as e:

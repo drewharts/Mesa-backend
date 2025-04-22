@@ -37,14 +37,11 @@ class WhooshSearchProvider(SearchProvider):
         self.ix = whoosh.index.open_dir(self.index_path)
 
     def search(self, query: str, limit: int = 10, latitude: float = None, longitude: float = None) -> List[SearchResult]:
-        logger.debug(f"Searching Whoosh index with query: '{query}', limit: {limit}")
         with self.ix.searcher() as searcher:
             # Create a query parser that only searches the name field
             query_parser = whoosh.qparser.QueryParser("name", self.ix.schema)
             q = query_parser.parse(query)
-            logger.debug(f"Parsed query: {q}")
             results = searcher.search(q, limit=limit)
-            logger.debug(f"Found {len(results)} results in Whoosh index")
             
             search_results = [
                 SearchResult(
@@ -57,9 +54,6 @@ class WhooshSearchProvider(SearchProvider):
                 )
                 for result in results
             ]
-            
-            for result in search_results:
-                logger.debug(f"Whoosh result: {result.name} at {result.address}")
             
             return search_results
 
