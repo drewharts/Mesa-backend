@@ -39,14 +39,14 @@ class WhooshSearchProvider(SearchProvider):
         self.ix = whoosh.index.open_dir(self.index_path)
 
     def _is_same_place(self, place1: SearchResult, place2: SearchResult) -> bool:
-        """Check if two places are likely the same based on name and address."""
+        """Check if two places are likely the same based on name, address, and coordinates."""
         # Normalize names and addresses for comparison
         name1 = place1.name.lower().strip()
         name2 = place2.name.lower().strip()
         
         # If names are exactly the same
         if name1 == name2:
-            # Check if addresses are similar (allowing for different formatting)
+            # Check if addresses are exactly the same after normalization
             addr1 = place1.address.lower().strip()
             addr2 = place2.address.lower().strip()
             
@@ -55,9 +55,13 @@ class WhooshSearchProvider(SearchProvider):
                 addr1 = addr1.replace(suffix, '')
                 addr2 = addr2.replace(suffix, '')
             
-            # If addresses are similar after normalization
+            # If addresses are exactly the same after normalization
             if addr1 == addr2:
-                return True
+                # Check if coordinates are very close (within ~100 meters)
+                lat_diff = abs(place1.latitude - place2.latitude)
+                lon_diff = abs(place1.longitude - place2.longitude)
+                if lat_diff < 0.001 and lon_diff < 0.001:  # Approximately 100 meters
+                    return True
                 
         return False
 
@@ -82,10 +86,10 @@ class WhooshSearchProvider(SearchProvider):
                     source="local"
                 )
                 
-                # Create a unique key for this place
-                place_key = f"{search_result.name.lower()}|{search_result.address.lower()}"
+                # Create a unique key for this place using name, address, and coordinates
+                place_key = f"{search_result.name.lower()}|{search_result.address.lower()}|{search_result.latitude}|{search_result.longitude}"
                 
-                # Only add if we haven't seen this place before
+                # Only add if we haven't seen this exact place before
                 if place_key not in seen_places:
                     search_results.append(search_result)
                     seen_places.add(place_key)

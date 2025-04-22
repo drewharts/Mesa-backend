@@ -17,14 +17,14 @@ class SearchOrchestrator:
         self.google_places_provider = google_places_provider
 
     def _is_same_place(self, place1: SearchResult, place2: SearchResult) -> bool:
-        """Check if two places are likely the same based on name and address."""
+        """Check if two places are likely the same based on name, address, and coordinates."""
         # Normalize names and addresses for comparison
         name1 = place1.name.lower().strip()
         name2 = place2.name.lower().strip()
         
         # If names are exactly the same
         if name1 == name2:
-            # Check if addresses are similar (allowing for different formatting)
+            # Check if addresses are exactly the same after normalization
             addr1 = place1.address.lower().strip()
             addr2 = place2.address.lower().strip()
             
@@ -33,9 +33,13 @@ class SearchOrchestrator:
                 addr1 = addr1.replace(suffix, '')
                 addr2 = addr2.replace(suffix, '')
             
-            # If addresses are similar after normalization
+            # If addresses are exactly the same after normalization
             if addr1 == addr2:
-                return True
+                # Check if coordinates are very close (within ~100 meters)
+                lat_diff = abs(place1.latitude - place2.latitude)
+                lon_diff = abs(place1.longitude - place2.longitude)
+                if lat_diff < 0.001 and lon_diff < 0.001:  # Approximately 100 meters
+                    return True
                 
         return False
 
