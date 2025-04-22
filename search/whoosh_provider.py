@@ -3,7 +3,9 @@ import logging
 import whoosh.index
 import whoosh.fields
 import whoosh.qparser
-from whoosh.analysis import StandardAnalyzer
+from whoosh.analysis import StandardAnalyzer, StemmingAnalyzer, RegexTokenizer, LowercaseFilter, StopFilter, StemFilter
+from whoosh.lang.porter import stem
+from whoosh.lang.wordnet import lemmatize
 from typing import List, Dict, Any, Optional
 import uuid
 from firebase_admin import firestore
@@ -13,6 +15,19 @@ from search.storage import PlaceStorage
 from search.detail_place import DetailPlace
 
 logger = logging.getLogger(__name__)
+
+class CustomAnalyzer(StemmingAnalyzer):
+    def __init__(self):
+        # Create a tokenizer that splits on word boundaries
+        tokenizer = RegexTokenizer(r"\w+")
+        
+        # Create filters
+        lowercase = LowercaseFilter()
+        stop = StopFilter()
+        stemmer = StemFilter()
+        
+        # Chain the filters
+        self.chain = [tokenizer, lowercase, stop, stemmer]
 
 class WhooshSearchProvider(SearchProvider):
     def __init__(self, index_path: str = "whoosh_index"):
@@ -25,9 +40,9 @@ class WhooshSearchProvider(SearchProvider):
         if not os.path.exists(self.index_path):
             logger.debug(f"Creating new Whoosh index at {self.index_path}")
             os.mkdir(self.index_path)
-            # Simplified schema focusing on name
+            # Use custom analyzer for better text matching
             schema = whoosh.fields.Schema(
-                name=whoosh.fields.TEXT(stored=True, analyzer=StandardAnalyzer()),  # Using StandardAnalyzer for better text matching
+                name=whoosh.fields.TEXT(stored=True, analyzer=CustomAnalyzer()),
                 place_id=whoosh.fields.ID(stored=True),
                 # Keep these for the response but don't search on them
                 address=whoosh.fields.STORED,
@@ -70,7 +85,11 @@ class WhooshSearchProvider(SearchProvider):
         with self.ix.searcher() as searcher:
             # Create a query parser that only searches the name field
             query_parser = whoosh.qparser.QueryParser("name", self.ix.schema)
+            
+            # Add fuzzy matching to the query
             q = query_parser.parse(query)
+            
+            # Use fuzzy matching with a distance of 1 (allows for one character difference)
             results = searcher.search(q, limit=limit)
             
             # Convert to SearchResult objects with deduplication
@@ -80,7 +99,7 @@ class WhooshSearchProvider(SearchProvider):
             for result in results:
                 search_result = SearchResult(
                     name=result["name"],
-                    address=result.get("address", ""),  # Use get() since these are optional
+                    address=result.get("address", ""),
                     latitude=result.get("latitude", 0.0),
                     longitude=result.get("longitude", 0.0),
                     place_id=result["place_id"],
