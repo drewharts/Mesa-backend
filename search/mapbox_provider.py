@@ -140,19 +140,50 @@ class MapboxSearchProvider(SearchProvider):
             longitude = coordinates[0] if coordinates and len(coordinates) > 0 else 0.0
             latitude = coordinates[1] if coordinates and len(coordinates) > 1 else 0.0
             
+            # Extract context information
+            context = properties.get("context", {})
+            city = context.get("place", {}).get("name", "")
+            neighborhood = context.get("neighborhood", {}).get("name", "")
+            region = context.get("region", {}).get("name", "")
+            country = context.get("country", {}).get("name", "")
+            postal_code = context.get("postcode", {}).get("name", "")
+            
+            # Extract additional metadata
+            metadata = properties.get("metadata", {})
+            wheelchair_accessible = metadata.get("wheelchair_accessible", False)
+            
+            # Extract operational status
+            operational_status = properties.get("operational_status", "")
+            
+            # Extract POI categories
+            poi_categories = properties.get("poi_category", [])
+            poi_category_ids = properties.get("poi_category_ids", [])
+            
+            # Combine all categories
+            all_categories = list(set(poi_categories + poi_category_ids))
+            
+            # Create a more detailed description
+            description = f"{properties.get('description', '')}"
+            if neighborhood:
+                description += f" Located in {neighborhood}."
+            if wheelchair_accessible:
+                description += " Wheelchair accessible."
+            if operational_status:
+                description += f" Status: {operational_status}."
+            
             return DetailPlace(
                 id=str(uuid.uuid4()).upper(),
                 name=properties.get("name", ""),
                 address=properties.get("full_address", ""),
-                city=properties.get("city", ""),
+                city=city,
                 mapbox_id=place_id,
                 latitude=latitude,
                 longitude=longitude,
-                categories=properties.get("categories", []),
+                categories=all_categories,
                 phone=properties.get("phone"),
                 rating=properties.get("rating"),
                 open_hours=properties.get("openHours", []),
-                description=properties.get("description"),
+                description=description,
                 price_level=properties.get("priceLevel"),
                 reservable=properties.get("reservable"),
                 serves_breakfast=properties.get("servesBreakfast"),
