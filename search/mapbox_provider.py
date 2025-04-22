@@ -48,7 +48,7 @@ class MapboxSearchProvider(SearchProvider):
             response.raise_for_status()
             data = response.json()
             
-            # Use a dictionary to track unique results by mapbox_id and name+address combination
+            # Use a dictionary to track unique results by mapbox_id and name+address+coordinates combination
             unique_results = {}
             seen_places = set()
             
@@ -62,19 +62,19 @@ class MapboxSearchProvider(SearchProvider):
                 name = suggestion.get("name", "")
                 full_address = suggestion.get("place_formatted", "")
                 
-                # Create a unique key combining name and address
-                place_key = f"{name.lower()}|{full_address.lower()}"
-                
-                # Skip if we've seen this place before (either by ID or name+address)
-                if mapbox_id in unique_results or place_key in seen_places:
-                    continue
-                
                 # Get coordinates if available
                 point = suggestion.get("point", {})
                 coordinates = point.get("coordinates", [])
                 # Mapbox returns coordinates as [longitude, latitude]
                 longitude = coordinates[0] if coordinates and len(coordinates) > 0 else 0.0
                 latitude = coordinates[1] if coordinates and len(coordinates) > 1 else 0.0
+                
+                # Create a unique key combining name, address, and coordinates
+                place_key = f"{name.lower()}|{full_address.lower()}|{latitude}|{longitude}"
+                
+                # Skip if we've seen this exact place before (by ID or name+address+coordinates)
+                if mapbox_id in unique_results or place_key in seen_places:
+                    continue
                 
                 search_result = SearchResult(
                     name=name,
