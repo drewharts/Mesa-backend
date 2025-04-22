@@ -111,73 +111,77 @@ class MapboxSearchProvider(SearchProvider):
         encoded_place_id = requests.utils.quote(place_id)
         
         try:
-            # Use the cached result if available
-            cached_details = self.cache.get_details(place_id)
-            if cached_details:
-                logger.debug(f"Using cached details for place_id: {place_id}")
-                return cached_details
-                
-            # Construct the URL for the Mapbox Retrieve API
-            url = f"https://api.mapbox.com/search/searchbox/v1/retrieve/{encoded_place_id}"
-            params = {
-                "access_token": self.access_token,
-                "language": "en"
-            }
+            # Retrieve place details from Mapbox
+            url = f"https://api.mapbox.com/search/searchbox/v1/retrieve/{encoded_place_id}?access_token={self.access_token}"
+            response = requests.get(url)
             
-            # Make the request
-            response = requests.get(url, params=params)
+            # Raise an exception for HTTP errors
             response.raise_for_status()
             
             # Parse the response
             data = response.json()
             
-            if "message" in data:
-                logger.error(f"Mapbox API error: {data['message']}")
-                raise ValueError(f"Error retrieving place details: {data['message']}")
+            # Check if we have features
+            if 'features' not in data or not data['features']:
+                raise ValueError(f"No place found for ID: {place_id}")
                 
-            # Extract relevant data from the feature
-            if "features" not in data or not data["features"]:
-                raise ValueError("No place found with the given ID")
-                
+            # Get the first feature
             feature = data['features'][0]
+            
+            # Extract properties
             properties = feature.get('properties', {})
-            geometry = feature.get('geometry', {})
-            context = properties.get('context', {})
             
             # Extract coordinates
-            coordinates = geometry.get('coordinates', [0.0, 0.0])
-            # In GeoJSON, coordinates are [longitude, latitude]
+            geometry = feature.get('geometry', {})
+            coordinates = geometry.get('coordinates', [0, 0])
             longitude, latitude = coordinates
+            
+            # Create a GeoPoint
             coordinate = firestore.GeoPoint(latitude, longitude)
             
-            # Extract city information
-            city = properties.get('place_formatted', '')
-            if not city:
-                place_info = context.get('place', {})
-                city = place_info.get('name', '')
-                
-            # If we still don't have a city, try to extract from address
-            if not city:
-                address_parts = properties.get('full_address', '').split(',')
-                if len(address_parts) > 1:
-                    city = address_parts[1].strip()
+            # Extract address components
+            context = properties.get('context', {})
+            city = context.get('locality', {}).get('name', context.get('place', {}).get('name', ''))
             
             # Extract neighborhood
             neighborhood = context.get('neighborhood', {}).get('name', '')
-            region = context.get('region', {}).get('name', '')
-            country = context.get('country', {}).get('name', '')
-            postal_code = context.get('postcode', {}).get('name', '')
+            
+            # Extract address
+            full_address = properties.get('full_address', '')
+            if not full_address:
+                address_parts = []
+                
+                if properties.get('address', ''):
+                    address_parts.append(properties.get('address', ''))
+                
+                if city:
+                    address_parts.append(city)
+                
+                if context.get('region', {}).get('name', ''):
+                    address_parts.append(context.get('region', {}).get('name', ''))
+                
+                if context.get('country', {}).get('name', ''):
+                    address_parts.append(context.get('country', {}).get('name', ''))
+                
+                if context.get('postcode', {}).get('name', ''):
+                    address_parts.append(context.get('postcode', {}).get('name', ''))
+                
+                full_address = ', '.join([part for part in address_parts if part])
+            
+            region = context.get("region", {}).get("name", "")
+            country = context.get("country", {}).get("name", "")
+            postal_code = context.get("postcode", {}).get("name", "")
             
             # Extract additional metadata
-            metadata = properties.get('metadata', {})
-            wheelchair_accessible = metadata.get('wheelchair_accessible', False)
+            metadata = properties.get("metadata", {})
+            wheelchair_accessible = metadata.get("wheelchair_accessible", False)
             
             # Extract operational status
-            operational_status = properties.get('operational_status', '')
+            operational_status = properties.get("operational_status", "")
             
             # Extract POI categories
-            poi_categories = properties.get('poi_category', [])
-            poi_category_ids = properties.get('poi_category_ids', [])
+            poi_categories = properties.get("poi_category", [])
+            poi_category_ids = properties.get("poi_category_ids", [])
             
             # Combine all categories
             all_categories = list(set(poi_categories + poi_category_ids))
@@ -187,31 +191,26 @@ class MapboxSearchProvider(SearchProvider):
             if neighborhood:
                 description += f" Located in {neighborhood}."
             
-            # Create a DetailPlace object with deterministic ID
-            detail_place = DetailPlace.create_with_deterministic_id(
-                name=properties.get('name', ''),
-                address=properties.get('full_address', ''),
+            return DetailPlace(
+                id=str(uuid.uuid4()).upper(),
+                name=properties.get("name", ""),
+                address=properties.get("full_address", ""),
                 city=city,
-                mapbox_id=place_id,
-                coordinate=coordinate,
+                mapbox_id=place_id,  # Use the original place_id passed to the method
+                coordinate=coordinate,  # Use GeoPoint instead of separate lat/lng
                 categories=all_categories,
-                phone=properties.get('phone'),
-                rating=properties.get('rating'),
-                open_hours=properties.get('openHours', []),
+                phone=properties.get("phone"),
+                rating=properties.get("rating"),
+                open_hours=properties.get("openHours", []),
                 description=description,
-                price_level=properties.get('priceLevel'),
-                reservable=properties.get('reservable'),
-                serves_breakfast=properties.get('servesBreakfast'),
-                serves_lunch=properties.get('servesLunch'),
-                serves_dinner=properties.get('servesDinner'),
-                instagram=properties.get('instagram'),
-                twitter=properties.get('twitter')
+                price_level=properties.get("priceLevel"),
+                reservable=properties.get("reservable"),
+                serves_breakfast=properties.get("servesBreakfast"),
+                serves_lunch=properties.get("servesLunch"),
+                serves_dinner=properties.get("servesDinner"),
+                instagram=properties.get("instagram"),
+                twitter=properties.get("twitter")
             )
-            
-            # Cache the result
-            self.cache.add_details(place_id, detail_place)
-            
-            return detail_place
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Error retrieving place details from Mapbox: {str(e)}")

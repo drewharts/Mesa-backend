@@ -76,57 +76,49 @@ class GooglePlacesSearchProvider(SearchProvider):
             return []
 
     def get_place_details(self, place_id: str) -> DetailPlace:
+        """Get detailed information about a specific place."""
         try:
-            # Use the cached result if available
-            cached_details = self.cache.get_details(place_id)
-            if cached_details:
-                logger.debug(f"Using cached details for place_id: {place_id}")
-                return cached_details
-                
-            # Configure URL and parameters
-            url = f"{self.base_url}/place/details/json"
-            params = {
-                "place_id": place_id,
-                "key": self.api_key,
-                "fields": "name,place_id,formatted_address,geometry,types,photos,formatted_phone_number,opening_hours,rating,price_level"
-            }
+            place_url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=name,place_id,formatted_address,geometry,types,rating,formatted_phone_number,opening_hours,price_level&key={self.api_key}"
             
-            # Make the request
-            response = requests.get(url, params=params)
+            response = requests.get(place_url)
             response.raise_for_status()
             
-            # Parse the response
-            place_details = response.json()
+            data = response.json()
             
-            # Check for errors
-            if place_details.get("status") != "OK":
-                error = place_details.get("error_message", "Unknown error")
-                logger.error(f"Error from Google Places API: {error}")
-                raise ValueError(f"Error fetching place details: {error}")
+            if data.get("status") != "OK":
+                logger.error(f"Error getting place details from Google: {data.get('status')}")
+                raise ValueError(f"Failed to get place details: {data.get('status')}")
                 
-            place = place_details["result"]
+            place = data.get("result", {})
             
+            if not place:
+                raise ValueError("Place details not found")
+                
             # Extract location
-            location = place.get("geometry", {}).get("location", {})
-            latitude = location.get("lat", 0.0)
-            longitude = location.get("lng", 0.0)
-            coordinate = firestore.GeoPoint(latitude, longitude)
+            geometry = place.get("geometry", {})
+            location = geometry.get("location", {})
+            lat = location.get("lat", 0)
+            lng = location.get("lng", 0)
             
-            # Extract city from address components
-            address_components = place.get("address_components", [])
+            coordinate = firestore.GeoPoint(lat, lng)
+            
+            # Extract city information from formatted address
             city = ""
-            for component in address_components:
-                if "locality" in component.get("types", []):
-                    city = component.get("long_name", "")
-                    break
-            
-            # Create a DetailPlace object with deterministic ID
-            detail_place = DetailPlace.create_with_deterministic_id(
+            formatted_address = place.get("formatted_address", "")
+            if formatted_address:
+                parts = formatted_address.split(',')
+                if len(parts) > 1:
+                    city_parts = parts[1].strip().split()
+                    if city_parts:
+                        city = city_parts[0]
+
+            return DetailPlace(
+                id=str(uuid.uuid4()).upper(),
                 name=place.get("name", ""),
                 address=place.get("formatted_address", ""),
                 city=city,
-                google_places_id=place.get("place_id"),
-                coordinate=coordinate,
+                google_places_id=place_id,  # Use the original place_id passed to the method
+                coordinate=coordinate,  # Use GeoPoint instead of separate lat/lng
                 categories=place.get("types", []),
                 phone=place.get("formatted_phone_number"),
                 rating=place.get("rating"),
@@ -140,11 +132,6 @@ class GooglePlacesSearchProvider(SearchProvider):
                 instagram=None,  # Not provided by Google Places
                 twitter=None  # Not provided by Google Places
             )
-            
-            # Cache the result
-            self.cache.add_details(place_id, detail_place)
-            
-            return detail_place
         except Exception as e:
             logger.error(f"Error getting Google Places details: {str(e)}")
             raise
