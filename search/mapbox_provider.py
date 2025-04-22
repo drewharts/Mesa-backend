@@ -166,10 +166,6 @@ class MapboxSearchProvider(SearchProvider):
             description = f"{properties.get('description', '')}"
             if neighborhood:
                 description += f" Located in {neighborhood}."
-            if wheelchair_accessible:
-                description += " Wheelchair accessible."
-            if operational_status:
-                description += f" Status: {operational_status}."
             
             return DetailPlace(
                 id=str(uuid.uuid4()).upper(),
