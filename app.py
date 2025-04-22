@@ -9,6 +9,8 @@ from search.storage import PlaceStorage
 import whoosh
 from whoosh.fields import Schema, TEXT, ID, STORED
 from whoosh.analysis import StandardAnalyzer
+from search.detail_place import DetailPlace
+from search.search_result import SearchResult
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -191,17 +193,17 @@ def get_place_details():
             if whoosh_provider is None:
                 return jsonify({"error": "Local search provider is not available"}), 503
             try:
-                place = whoosh_provider.get_place_details(place_id)
+                detail_place = whoosh_provider.get_place_details(place_id)
             except ValueError as e:
                 return jsonify({"error": str(e)}), 404
         elif provider == 'mapbox':
             if mapbox_provider is None:
                 return jsonify({"error": "Mapbox search provider is not available"}), 503
-            place = mapbox_provider.get_place_details(place_id)
+            detail_place = mapbox_provider.get_place_details(place_id)
         elif provider == 'google':
             if google_places_provider is None:
                 return jsonify({"error": "Google Places search provider is not available"}), 503
-            place = google_places_provider.get_place_details(place_id)
+            detail_place = google_places_provider.get_place_details(place_id)
         else:
             return jsonify({
                 "error": "Invalid provider. Must be one of: local, mapbox, google"
@@ -210,33 +212,33 @@ def get_place_details():
         # Save to local database if not already there
         if provider != 'local' and whoosh_provider is not None:
             try:
+                # Convert DetailPlace to SearchResult for saving
+                search_result = SearchResult(
+                    name=detail_place.name,
+                    address=detail_place.address,
+                    latitude=detail_place.latitude,
+                    longitude=detail_place.longitude,
+                    place_id=detail_place.id,
+                    source=provider
+                )
+                
                 # Save to Whoosh index
-                whoosh_provider.save_place(place)
-                logger.info(f"Saved place to Whoosh index: {place.name}")
+                whoosh_provider.save_place(search_result)
+                logger.info(f"Saved place to Whoosh index: {detail_place.name}")
                 
                 # Save to Firestore
                 try:
                     storage = PlaceStorage()
-                    firestore_id = storage.save_place(place)
+                    firestore_id = storage.save_place(search_result)
                     logger.info(f"Saved place to Firestore with ID: {firestore_id}")
                 except Exception as e:
                     logger.error(f"Error saving to Firestore: {str(e)}")
             except Exception as e:
                 logger.error(f"Error saving place: {str(e)}")
                 
-        # Return detailed place information
+        # Return detailed place information in DetailPlace format
         return jsonify({
-            "place": {
-                "id": place.place_id,
-                "name": place.name,
-                "address": place.address,
-                "location": {
-                    "latitude": place.latitude,
-                    "longitude": place.longitude
-                },
-                "provider": place.source,
-                "additional_data": place.additional_data
-            }
+            "place": detail_place.to_dict()
         })
         
     except Exception as e:
@@ -277,6 +279,15 @@ def reindex_places():
     try:
         from index_places import index_places_from_firestore
         logger.info("Manual reindex triggered")
+        
+        # Clear the Whoosh index first
+        if whoosh_provider is not None:
+            whoosh_provider.clear_index()
+            logger.info("Whoosh index cleared before reindexing")
+        else:
+            logger.warning("Whoosh provider not available, skipping index clear")
+            
+        # Reindex from Firestore
         index_places_from_firestore()
         logger.info("Reindex completed successfully")
         return jsonify({"status": "success", "message": "Reindex completed successfully"}), 200

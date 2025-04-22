@@ -1,16 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
-
-class SearchResult:
-    def __init__(self, name: str, address: str, latitude: float, longitude: float, 
-                 source: str, place_id: str = None, additional_data: Dict = None):
-        self.name = name
-        self.address = address
-        self.latitude = latitude
-        self.longitude = longitude
-        self.source = source
-        self.place_id = place_id
-        self.additional_data = additional_data or {}
+from search.detail_place import DetailPlace
+from search.search_result import SearchResult
 
 class SearchProvider(ABC):
     @abstractmethod
@@ -19,6 +10,6 @@ class SearchProvider(ABC):
         pass
         
     @abstractmethod
-    def get_place_details(self, place_id: str) -> SearchResult:
+    def get_place_details(self, place_id: str) -> DetailPlace:
         """Get detailed information about a specific place."""
         pass 
