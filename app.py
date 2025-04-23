@@ -240,9 +240,13 @@ def get_place_details():
                             # Save to Firestore
                             doc_ref = places_ref.add(place_data)
                             firestore_id = doc_ref[1].id
+                            # Update the detail_place ID to match the Firestore ID
+                            detail_place.id = firestore_id
                             logger.info(f"Saved place to Firestore with ID: {firestore_id}")
                     else:
                         logger.info(f"Place already exists in Firestore with ID: {existing_id}")
+                        # Update the detail_place ID to match the existing ID
+                        detail_place.id = existing_id
                 except Exception as e:
                     logger.error(f"Error saving to Firestore: {str(e)}")
             except Exception as e:

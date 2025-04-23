@@ -112,14 +112,93 @@ class GooglePlacesSearchProvider(SearchProvider):
             # Create a GeoPoint from the coordinates
             location = place["geometry"]["location"]
             coordinate = firestore.GeoPoint(location["lat"], location["lng"])
+            
+            # Create a SearchResult to check for duplicates
+            search_result = SearchResult(
+                name=place.get("name", ""),
+                address=place.get("formatted_address", ""),
+                latitude=location["lat"],
+                longitude=location["lng"],
+                place_id=place.get("place_id"),
+                source="google"
+            )
+            
+            # Check if this place already exists in our database
+            existing_id = self.storage._check_for_duplicate(search_result)
+            
+            # If we found an existing place, get its details from Firestore
+            if existing_id:
+                logger.info(f"Found existing place with ID: {existing_id}")
+                try:
+                    # Get the place from Firestore
+                    places_ref = self.storage.db.collection('places')
+                    place_doc = places_ref.document(existing_id).get()
+                    
+                    if place_doc.exists:
+                        place_data = place_doc.to_dict()
+                        # Create a DetailPlace from the Firestore data
+                        return DetailPlace(
+                            id=existing_id,  # Use the existing ID
+                            name=place_data.get('name', ''),
+                            address=place_data.get('address', ''),
+                            city=place_data.get('city', ''),
+                            mapbox_id=place_data.get('mapboxId'),
+                            google_places_id=place_data.get('googlePlacesId'),
+                            coordinate=place_data.get('coordinate'),
+                            categories=place_data.get('categories', []),
+                            phone=place_data.get('phone'),
+                            rating=place_data.get('rating'),
+                            open_hours=place_data.get('openHours', []),
+                            description=place_data.get('description'),
+                            price_level=place_data.get('priceLevel'),
+                            reservable=place_data.get('reservable'),
+                            serves_breakfast=place_data.get('servesBreakfast'),
+                            serves_lunch=place_data.get('servesLunch'),
+                            serves_dinner=place_data.get('servesDinner'),
+                            instagram=place_data.get('instagram'),
+                            twitter=place_data.get('twitter')
+                        )
+                except Exception as e:
+                    logger.error(f"Error retrieving existing place from Firestore: {str(e)}")
+                    # Continue with creating a new place if there's an error
+
+            # If no existing place found or error retrieving it, create a new one
+            # Generate a UUID for the place
+            place_uuid = str(uuid.uuid4()).upper()
+            
+            # First save to Firestore to get the document ID
+            places_ref = self.storage.db.collection('places')
+            place_data = {
+                'id': place_uuid,  # Add the UUID as the id field
+                'name': place.get("name", ""),
+                'address': place.get("formatted_address", ""),
+                'city': city,
+                'googlePlacesId': place.get("place_id"),
+                'coordinate': coordinate,
+                'categories': place.get("types", []),
+                'phone': place.get("formatted_phone_number"),
+                'rating': place.get("rating"),
+                'openHours': place.get("opening_hours", {}).get("weekday_text", []),
+                'description': place.get("formatted_address"),
+                'priceLevel': str(place.get("price_level")) if place.get("price_level") is not None else None,
+                'reservable': None,  # Not provided by Google Places
+                'servesBreakfast': None,  # Not provided by Google Places
+                'servesLunch': None,  # Not provided by Google Places
+                'servesDinner': None,  # Not provided by Google Places
+                'instagram': None,  # Not provided by Google Places
+                'twitter': None  # Not provided by Google Places
+            }
+            # Create the document with the specific ID
+            doc_ref = places_ref.document(place_uuid)
+            doc_ref.set(place_data)
 
             return DetailPlace(
-                id=str(uuid.uuid4()).upper(),
+                id=place_uuid,  # Use the generated UUID
                 name=place.get("name", ""),
                 address=place.get("formatted_address", ""),
                 city=city,
                 google_places_id=place.get("place_id"),
-                coordinate=coordinate,  # Use GeoPoint instead of separate lat/lng
+                coordinate=coordinate,
                 categories=place.get("types", []),
                 phone=place.get("formatted_phone_number"),
                 rating=place.get("rating"),
