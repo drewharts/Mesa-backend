@@ -5,6 +5,7 @@ import uuid
 import firebase_admin
 from firebase_admin import credentials, firestore
 from typing import Optional
+import math
 
 from search.base import SearchResult
 
@@ -178,22 +179,38 @@ class PlaceStorage:
                     if existing_places:
                         return existing_places[0].id
             
-            # If no match by ID, check by name and address
+            # If no match by ID, check by name and proximity
             normalized_name = self._normalize_string(place.name)
-            normalized_address = self._normalize_string(place.address)
             
             # Get all places with the same name
             places_with_same_name = places_ref.where('name', '==', place.name).get()
             
-            # Check each place with the same name for matching address
+            # Check each place with the same name for proximity
             for doc in places_with_same_name:
                 doc_data = doc.to_dict()
-                doc_address = self._normalize_string(doc_data.get('address', ''))
+                doc_coordinate = doc_data.get('coordinate')
                 
-                # If both name and address match, it's a duplicate
-                if doc_address == normalized_address:
-                    logger.info(f"Found duplicate place by name and address: {place.name}")
-                    return doc.id
+                if doc_coordinate:
+                    # Calculate distance between coordinates (in feet)
+                    # Using the Haversine formula to calculate distance between two points on Earth
+                    lat1, lon1 = place.latitude, place.longitude
+                    lat2, lon2 = doc_coordinate.latitude, doc_coordinate.longitude
+                    
+                    # Convert to radians
+                    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+                    
+                    # Haversine formula
+                    dlat = lat2 - lat1
+                    dlon = lon2 - lon1
+                    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                    c = 2 * math.asin(math.sqrt(a))
+                    r = 20902231  # Radius of earth in feet
+                    distance = c * r
+                    
+                    # If within 100 feet, it's a duplicate
+                    if distance <= 100:
+                        logger.info(f"Found duplicate place by name and proximity: {place.name}")
+                        return doc.id
             
             # No match found
             return None
