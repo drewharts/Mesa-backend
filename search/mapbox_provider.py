@@ -87,12 +87,6 @@ class MapboxSearchProvider(SearchProvider):
                     additional_data=suggestion
                 )
                 
-                # Save to Firestore
-                try:
-                    self.storage.save_place(search_result)
-                except Exception as e:
-                    logger.error(f"Error saving place to Firestore: {str(e)}")
-                
                 # Add to unique results and seen places
                 unique_results[mapbox_id] = search_result
                 seen_places.add(place_key)
