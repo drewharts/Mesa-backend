@@ -58,12 +58,6 @@ class GooglePlacesSearchProvider(SearchProvider):
                             source="google"
                         )
                         
-                        # Save to Firestore
-                        try:
-                            self.storage.save_place(search_result)
-                        except Exception as e:
-                            logger.error(f"Error saving place to Firestore: {str(e)}")
-                            
                         results.append(search_result)
             
             # Cache the results
