@@ -458,6 +458,9 @@ def nearby_places():
         
         # Convert to GeoJSON format and save to database
         features = []
+        saved_to_whoosh = 0
+        saved_to_firestore = 0
+        
         for place in places:
             geometry = place.get("geometry", {})
             location = geometry.get("location", {})
@@ -483,12 +486,28 @@ def nearby_places():
                 }
             )
             
-            # Save to database for future use
+            # Save to local database following project's existing structure
+            # Save to both Whoosh and Firestore (same pattern as place-details endpoint)
             try:
-                place_storage.save_place(search_result)
-                logger.debug(f"Saved place to database: {search_result.name}")
+                # Save to Whoosh index if available
+                if whoosh_provider is not None:
+                    try:
+                        whoosh_provider.save_place(search_result)
+                        saved_to_whoosh += 1
+                        logger.debug(f"Saved place to Whoosh index: {search_result.name}")
+                    except Exception as e:
+                        logger.error(f"Error saving to Whoosh index: {str(e)}")
+                
+                # Save to Firestore
+                try:
+                    place_storage.save_place(search_result)
+                    saved_to_firestore += 1
+                    logger.debug(f"Saved place to Firestore: {search_result.name}")
+                except Exception as e:
+                    logger.error(f"Error saving to Firestore: {str(e)}")
+                
             except Exception as e:
-                logger.error(f"Error saving place to database: {str(e)}")
+                logger.error(f"Error in caching process for place {search_result.name}: {str(e)}")
             
             feature = {
                 "type": "Feature",
@@ -520,6 +539,7 @@ def nearby_places():
             
             features.append(feature)
         
+        logger.info(f"Caching summary: {saved_to_whoosh}/{len(places)} places saved to Whoosh, {saved_to_firestore}/{len(places)} places saved to Firestore")
         logger.debug(f"Returning {len(features)} nearby places from Google API")
         
         return jsonify({
@@ -534,7 +554,12 @@ def nearby_places():
                 "place_type": place_type,
                 "total_results": len(features),
                 "data_source": "google_places_api",
-                "cache_hit": False
+                "cache_hit": False,
+                "caching_summary": {
+                    "places_cached_to_whoosh": saved_to_whoosh,
+                    "places_cached_to_firestore": saved_to_firestore,
+                    "total_places_processed": len(places)
+                }
             }
         })
         
