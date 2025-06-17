@@ -4,7 +4,7 @@ import logging
 import uuid
 import firebase_admin
 from firebase_admin import credentials, firestore
-from typing import Optional
+from typing import Optional, List
 import math
 
 from search.base import SearchResult
@@ -219,7 +219,107 @@ class PlaceStorage:
             logger.error(f"Error checking for duplicates: {str(e)}")
             return None
 
+    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate distance between two points in meters using Haversine formula"""
+        # Convert latitude and longitude from degrees to radians
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        
+        # Haversine formula
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        
+        # Radius of Earth in meters
+        r = 6371000
+        
+        return c * r
+
+    def find_nearby_places(self, latitude: float, longitude: float, radius_meters: int = 50, limit: int = 20) -> List[SearchResult]:
+        """Find places within the specified radius of the given coordinates"""
+        try:
+            places_ref = self.db.collection('places')
+            
+            # Get all places (we'll filter by distance since Firestore geo queries are complex)
+            # For better performance in production, consider using Firestore geo queries or a spatial index
+            all_places = places_ref.limit(1000).get()  # Limit to prevent excessive reads
+            
+            nearby_places = []
+            
+            for doc in all_places:
+                place_data = doc.to_dict()
+                coordinate = place_data.get('coordinate')
+                
+                if coordinate:
+                    place_lat = coordinate.latitude
+                    place_lng = coordinate.longitude
+                    
+                    # Calculate distance
+                    distance = self._calculate_distance(latitude, longitude, place_lat, place_lng)
+                    
+                    if distance <= radius_meters:
+                        # Convert back to SearchResult
+                        search_result = SearchResult(
+                            name=place_data.get('name', ''),
+                            address=place_data.get('address', ''),
+                            latitude=place_lat,
+                            longitude=place_lng,
+                            place_id=place_data.get('place_id'),
+                            source=place_data.get('source', 'firestore'),
+                            additional_data={
+                                'firestore_id': doc.id,
+                                'distance_meters': round(distance, 2),
+                                **{k: v for k, v in place_data.items() if k not in ['name', 'address', 'coordinate', 'place_id', 'source']}
+                            }
+                        )
+                        nearby_places.append(search_result)
+            
+            # Sort by distance and limit results
+            nearby_places.sort(key=lambda x: x.additional_data.get('distance_meters', 0))
+            return nearby_places[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error finding nearby places in Firestore: {str(e)}")
+            return []
+
     def save_place(self, place: SearchResult) -> str:
+        """Save a place to Firestore and return its ID."""
+        try:
+            # Check if place already exists
+            places_ref = self.db.collection('places')
+            existing_places = places_ref.where('place_id', '==', place.place_id).get()
+            
+            if existing_places:
+                # Place already exists, return its ID
+                return existing_places[0].id
+                
+            # Create new place document
+            place_data = {
+                'name': place.name,
+                'address': place.address,
+                'coordinate': firestore.GeoPoint(place.latitude, place.longitude),
+                'place_id': place.place_id,
+                'source': place.source,
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'updated_at': firestore.SERVER_TIMESTAMP
+            }
+            
+            # Add any additional data
+            if place.additional_data:
+                # Filter out internal fields that shouldn't be stored
+                filtered_data = {k: v for k, v in place.additional_data.items() 
+                               if k not in ['firestore_id', 'distance_meters']}
+                place_data.update(filtered_data)
+                
+            # Save to Firestore
+            doc_ref = places_ref.add(place_data)
+            return doc_ref[1].id  # Return the document ID
+            
+        except Exception as e:
+            logger.error(f"Error saving place to Firestore: {str(e)}")
+            return f"error_{place.place_id}"
+
+    def save_place_old(self, place: SearchResult) -> str:
         """Save a place to Firestore based on its source."""
         try:
             # Check for existing place first
@@ -238,31 +338,4 @@ class PlaceStorage:
                 return f"dummy_id_{place.place_id}"
         except Exception as e:
             logger.error(f"Error saving place: {str(e)}")
-            return f"dummy_id_{place.place_id}"
-        
-        # # Check if place already exists
-        # places_ref = self.db.collection('places')
-        # existing_places = places_ref.where('place_id', '==', place.place_id).get()
-        
-        # if existing_places:
-        #     # Place already exists, return its ID
-        #     return existing_places[0].id
-            
-        # # Create new place document
-        # place_data = {
-        #     'name': place.name,
-        #     'address': place.address,
-        #     'coordinate': firestore.GeoPoint(place.latitude, place.longitude),
-        #     'place_id': place.place_id,
-        #     'source': place.source,
-        #     'created_at': firestore.SERVER_TIMESTAMP,
-        #     'updated_at': firestore.SERVER_TIMESTAMP
-        # }
-        
-        # # Add any additional data
-        # if place.additional_data:
-        #     place_data.update(place.additional_data)
-            
-        # # Save to Firestore
-        # doc_ref = places_ref.add(place_data)
-        # return doc_ref[1].id 
+            return f"dummy_id_{place.place_id}" 
