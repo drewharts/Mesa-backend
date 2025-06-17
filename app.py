@@ -4,6 +4,7 @@ import os
 import logging
 import tempfile
 import sys
+import requests
 from search import WhooshSearchProvider, MapboxSearchProvider, GooglePlacesSearchProvider, SearchOrchestrator
 from search.storage import PlaceStorage
 import whoosh
@@ -82,6 +83,9 @@ search_orchestrator = SearchOrchestrator(
     google_places_provider=google_places_provider
 )
 
+# Initialize place storage for nearby places endpoint
+place_storage = PlaceStorage()
+
 @app.route('/', methods=['GET'])
 def index():
     """Root endpoint that returns basic API information"""
@@ -93,7 +97,8 @@ def index():
             {"path": "/", "methods": ["GET"], "description": "This endpoint - API information"},
             {"path": "/health", "methods": ["GET"], "description": "Health check endpoint"},
             {"path": "/search/suggestions", "methods": ["GET"], "description": "Get search suggestions"},
-            {"path": "/search/place-details", "methods": ["GET"], "description": "Get place details"}
+            {"path": "/search/place-details", "methods": ["GET"], "description": "Get place details"},
+            {"path": "/nearby-places", "methods": ["GET"], "description": "Get nearby places"}
         ]
     })
 
@@ -310,6 +315,234 @@ def reindex_places():
     except Exception as e:
         logger.error(f"Error during reindex: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/nearby-places', methods=['GET'])
+def nearby_places():
+    """
+    Endpoint to find nearby places using Google Places API Nearby Search
+    First checks local database for existing places within 50m radius before calling Google API
+    Expected parameters:
+    - latitude: float (required)
+    - longitude: float (required)
+    - radius: int (optional, default 50, max 50000 meters)
+    - type: string (optional, place type filter)
+    - limit: int (optional, default 20, max 60)
+    """
+    try:
+        # Get required coordinates
+        latitude = request.args.get('latitude')
+        longitude = request.args.get('longitude')
+        
+        if not latitude or not longitude:
+            logger.warning("Missing latitude or longitude parameters")
+            return jsonify({
+                "error": "Both latitude and longitude parameters are required"
+            }), 400
+            
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except ValueError:
+            logger.warning("Invalid latitude or longitude values")
+            return jsonify({
+                "error": "Latitude and longitude must be valid numbers"
+            }), 400
+        
+        # Get optional parameters
+        radius = int(request.args.get('radius', 50))  # Default 50 meters
+        place_type = request.args.get('type')  # Optional place type filter
+        limit = int(request.args.get('limit', 20))  # Default 20 results
+        
+        # Validate radius (Google Places API limit)
+        if radius > 50000:
+            radius = 50000
+        elif radius < 1:
+            radius = 1
+            
+        # Validate limit
+        if limit > 60:  # Google Places API limit
+            limit = 60
+        elif limit < 1:
+            limit = 1
+        
+        logger.debug(f"Nearby places request - Lat: {latitude}, Lng: {longitude}, Radius: {radius}m, Type: {place_type}, Limit: {limit}")
+        
+        # FIRST: Check if we have existing places within 50 meters in our database
+        existing_places = []
+        try:
+            logger.debug("Checking for existing places within 50 meters in local database")
+            existing_places = place_storage.find_nearby_places(latitude, longitude, 50, limit)
+            logger.debug(f"Found {len(existing_places)} existing places within 50 meters")
+        except Exception as e:
+            logger.error(f"Error checking local database: {str(e)}")
+        
+        # If we have existing places within 50 meters, use them instead of calling Google API
+        if existing_places:
+            logger.debug("Using existing places from local database instead of calling Google API")
+            
+            # Convert to GeoJSON format
+            features = []
+            for place in existing_places:
+                feature = {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [place.longitude, place.latitude]
+                    },
+                    "properties": {
+                        "name": place.name,
+                        "address": place.address,
+                        "place_id": place.place_id,
+                        "source": f"{place.source}_cached",
+                        "distance_meters": place.additional_data.get('distance_meters'),
+                        **{k: v for k, v in place.additional_data.items() if k not in ['firestore_id', 'distance_meters']}
+                    }
+                }
+                features.append(feature)
+            
+            return jsonify({
+                "type": "FeatureCollection",
+                "features": features,
+                "metadata": {
+                    "search_location": {
+                        "latitude": latitude,
+                        "longitude": longitude
+                    },
+                    "radius_meters": radius,
+                    "place_type": place_type,
+                    "total_results": len(features),
+                    "data_source": "local_database",
+                    "cache_hit": True
+                }
+            })
+        
+        # If no existing places found, proceed with Google API call
+        logger.debug("No existing places found within 50 meters, calling Google Places API")
+        
+        # Use Google Places API Nearby Search
+        api_key = os.getenv('GOOGLE_PLACES_API_KEY')
+        if not api_key:
+            logger.error("Google Places API key not configured")
+            return jsonify({
+                "error": "Google Places API key not configured"
+            }), 500
+        
+        # Build the API request URL
+        base_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+        params = {
+            "location": f"{latitude},{longitude}",
+            "radius": radius,
+            "key": api_key
+        }
+        
+        # Add place type filter if specified
+        if place_type:
+            params["type"] = place_type
+        
+        logger.debug(f"Making request to Google Places API with params: {params}")
+        
+        # Make the API request
+        response = requests.get(base_url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("status") != "OK":
+            logger.error(f"Google Places API error: {data.get('status')} - {data.get('error_message', 'Unknown error')}")
+            return jsonify({
+                "error": f"Google Places API error: {data.get('status')}"
+            }), 500
+        
+        # Process the results and save them to our database
+        places = data.get("results", [])[:limit]  # Limit results as requested
+        logger.debug(f"Found {len(places)} nearby places from Google API")
+        
+        # Convert to GeoJSON format and save to database
+        features = []
+        for place in places:
+            geometry = place.get("geometry", {})
+            location = geometry.get("location", {})
+            
+            # Create SearchResult object for saving
+            from search import SearchResult
+            search_result = SearchResult(
+                name=place.get("name", ""),
+                address=place.get("vicinity", ""),
+                latitude=location.get("lat"),
+                longitude=location.get("lng"),
+                place_id=place.get("place_id"),
+                source="google_places_nearby",
+                additional_data={
+                    "rating": place.get("rating"),
+                    "user_ratings_total": place.get("user_ratings_total"),
+                    "price_level": place.get("price_level"),
+                    "types": place.get("types", []),
+                    "business_status": place.get("business_status"),
+                    "permanently_closed": place.get("permanently_closed", False),
+                    "open_now": place.get("opening_hours", {}).get("open_now") if "opening_hours" in place else None,
+                    "photo_reference": place.get("photos", [{}])[0].get("photo_reference") if place.get("photos") else None
+                }
+            )
+            
+            # Save to database for future use
+            try:
+                place_storage.save_place(search_result)
+                logger.debug(f"Saved place to database: {search_result.name}")
+            except Exception as e:
+                logger.error(f"Error saving place to database: {str(e)}")
+            
+            feature = {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [location.get("lng"), location.get("lat")]
+                },
+                "properties": {
+                    "name": place.get("name", ""),
+                    "address": place.get("vicinity", ""),
+                    "place_id": place.get("place_id"),
+                    "source": "google_places_nearby",
+                    "rating": place.get("rating"),
+                    "user_ratings_total": place.get("user_ratings_total"),
+                    "price_level": place.get("price_level"),
+                    "types": place.get("types", []),
+                    "business_status": place.get("business_status"),
+                    "permanently_closed": place.get("permanently_closed", False)
+                }
+            }
+            
+            # Add optional fields if available
+            if "opening_hours" in place:
+                feature["properties"]["open_now"] = place["opening_hours"].get("open_now")
+            
+            if "photos" in place and place["photos"]:
+                # Add photo reference for the first photo
+                feature["properties"]["photo_reference"] = place["photos"][0].get("photo_reference")
+            
+            features.append(feature)
+        
+        logger.debug(f"Returning {len(features)} nearby places from Google API")
+        
+        return jsonify({
+            "type": "FeatureCollection",
+            "features": features,
+            "metadata": {
+                "search_location": {
+                    "latitude": latitude,
+                    "longitude": longitude
+                },
+                "radius_meters": radius,
+                "place_type": place_type,
+                "total_results": len(features),
+                "data_source": "google_places_api",
+                "cache_hit": False
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error during nearby places search: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5002))
