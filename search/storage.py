@@ -264,7 +264,7 @@ class PlaceStorage:
                             address=place_data.get('address', ''),
                             latitude=place_lat,
                             longitude=place_lng,
-                            place_id=place_data.get('place_id'),
+                            place_id=place_data.get('googlePlacesId', place_data.get('place_id')),  # Use googlePlacesId if available
                             source=place_data.get('source', 'firestore'),
                             additional_data={
                                 'firestore_id': doc.id,
