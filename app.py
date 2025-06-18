@@ -5,6 +5,7 @@ import logging
 import tempfile
 import sys
 import requests
+from firebase_admin import firestore
 from search import WhooshSearchProvider, MapboxSearchProvider, GooglePlacesSearchProvider, SearchOrchestrator
 from search.storage import PlaceStorage
 import whoosh
@@ -465,31 +466,59 @@ def nearby_places():
             geometry = place.get("geometry", {})
             location = geometry.get("location", {})
             
-            # Create SearchResult object for saving
-            from search import SearchResult
-            search_result = SearchResult(
-                name=place.get("name", ""),
-                address=place.get("vicinity", ""),
-                latitude=location.get("lat"),
-                longitude=location.get("lng"),
-                place_id=place.get("place_id"),
-                source="google_places_nearby",
-                additional_data={
-                    "rating": place.get("rating"),
-                    "user_ratings_total": place.get("user_ratings_total"),
-                    "price_level": place.get("price_level"),
-                    "types": place.get("types", []),
-                    "business_status": place.get("business_status"),
-                    "permanently_closed": place.get("permanently_closed", False),
-                    "open_now": place.get("opening_hours", {}).get("open_now") if "opening_hours" in place else None,
-                    "photo_reference": place.get("photos", [{}])[0].get("photo_reference") if place.get("photos") else None
-                }
-            )
-            
-            # Save to local database following project's existing structure
-            # Save to both Whoosh and Firestore (same pattern as place-details endpoint)
+            # Save to local database using same pattern as GooglePlacesSearchProvider.get_place_details()
             try:
-                # Save to Whoosh index if available
+                # Create SearchResult to check for duplicates (same as GooglePlacesSearchProvider)
+                search_result = SearchResult(
+                    name=place.get("name", ""),
+                    address=place.get("vicinity", ""),  # Nearby API uses 'vicinity' instead of 'formatted_address'
+                    latitude=location.get("lat"),
+                    longitude=location.get("lng"),
+                    place_id=place.get("place_id"),
+                    source="google_places_nearby"
+                )
+                
+                # Check if this place already exists (same pattern as GooglePlacesSearchProvider)
+                existing_id = place_storage._check_for_duplicate(search_result)
+                
+                if existing_id:
+                    logger.debug(f"Place already exists in database: {search_result.name} (ID: {existing_id})")
+                else:
+                    # Save new place using same structure as GooglePlacesSearchProvider
+                    import uuid
+                    place_uuid = str(uuid.uuid4()).upper()
+                    
+                    # Save directly to Firestore with proper structure (same as GooglePlacesSearchProvider)
+                    places_ref = place_storage.db.collection('places')
+                    place_data = {
+                        'id': place_uuid,
+                        'name': place.get("name", ""),
+                        'address': place.get("vicinity", ""),  # Nearby API uses 'vicinity'
+                        'city': "",  # Nearby API doesn't provide detailed address components
+                        'googlePlacesId': place.get("place_id"),
+                        'mapboxId': None,  # Not applicable for Google Places
+                        'coordinate': firestore.GeoPoint(location.get("lat"), location.get("lng")),
+                        'categories': place.get("types", []),
+                        'phone': None,  # Not provided by Nearby Search API
+                        'rating': place.get("rating"),
+                        'openHours': [],  # Not provided by Nearby Search API
+                        'description': place.get("vicinity", ""),
+                        'priceLevel': str(place.get("price_level")) if place.get("price_level") is not None else None,
+                        'reservable': None,
+                        'servesBreakfast': None,
+                        'servesLunch': None,
+                        'servesDinner': None,
+                        'instagram': None,
+                        'twitter': None
+                    }
+                    
+                    # Create document with specific ID (same as GooglePlacesSearchProvider)
+                    doc_ref = places_ref.document(place_uuid)
+                    doc_ref.set(place_data)
+                    saved_to_firestore += 1
+                    logger.debug(f"Saved new place to Firestore: {search_result.name} (ID: {place_uuid})")
+                
+                # Also save to Whoosh for search functionality
                 if whoosh_provider is not None:
                     try:
                         whoosh_provider.save_place(search_result)
@@ -497,17 +526,9 @@ def nearby_places():
                         logger.debug(f"Saved place to Whoosh index: {search_result.name}")
                     except Exception as e:
                         logger.error(f"Error saving to Whoosh index: {str(e)}")
-                
-                # Save to Firestore
-                try:
-                    place_storage.save_place(search_result)
-                    saved_to_firestore += 1
-                    logger.debug(f"Saved place to Firestore: {search_result.name}")
-                except Exception as e:
-                    logger.error(f"Error saving to Firestore: {str(e)}")
-                
+                        
             except Exception as e:
-                logger.error(f"Error in caching process for place {search_result.name}: {str(e)}")
+                logger.error(f"Error in caching process for place {place.get('name', 'Unknown')}: {str(e)}")
             
             feature = {
                 "type": "Feature",
