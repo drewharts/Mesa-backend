@@ -264,12 +264,14 @@ class PlaceStorage:
                             address=place_data.get('address', ''),
                             latitude=place_lat,
                             longitude=place_lng,
-                            place_id=place_data.get('googlePlacesId', place_data.get('place_id')),  # Use googlePlacesId if available
+                            place_id=doc.id,  # Use Firestore document ID for cached results
                             source=place_data.get('source', 'firestore'),
                             additional_data={
                                 'firestore_id': doc.id,
                                 'distance_meters': round(distance, 2),
-                                **{k: v for k, v in place_data.items() if k not in ['name', 'address', 'coordinate', 'place_id', 'source']}
+                                'googlePlacesId': place_data.get('googlePlacesId'),  # Preserve original Google Places ID
+                                'mapboxId': place_data.get('mapboxId'),  # Preserve original Mapbox ID
+                                **{k: v for k, v in place_data.items() if k not in ['name', 'address', 'coordinate', 'place_id', 'source', 'googlePlacesId', 'mapboxId']}
                             }
                         )
                         nearby_places.append(search_result)
