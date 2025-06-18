@@ -466,7 +466,7 @@ def nearby_places():
             geometry = place.get("geometry", {})
             location = geometry.get("location", {})
             
-            # Save to local database using same pattern as GooglePlacesSearchProvider.get_place_details()
+            # Save to local database with comprehensive duplicate prevention and immediate indexing
             try:
                 # Create SearchResult to check for duplicates (same as GooglePlacesSearchProvider)
                 search_result = SearchResult(
@@ -475,7 +475,7 @@ def nearby_places():
                     latitude=location.get("lat"),
                     longitude=location.get("lng"),
                     place_id=place.get("place_id"),
-                    source="google_places_nearby"
+                    source="google"  # Use 'google' source to match duplicate checking logic
                 )
                 
                 # Check if this place already exists (same pattern as GooglePlacesSearchProvider)
@@ -483,49 +483,58 @@ def nearby_places():
                 
                 if existing_id:
                     logger.debug(f"Place already exists in database: {search_result.name} (ID: {existing_id})")
+                    # Even if it exists in Firestore, ensure it's in Whoosh for immediate search
+                    if whoosh_provider is not None:
+                        try:
+                            whoosh_provider.save_place(search_result)
+                            saved_to_whoosh += 1
+                            logger.debug(f"Ensured place exists in Whoosh index: {search_result.name}")
+                        except Exception as e:
+                            logger.debug(f"Place already in Whoosh or error: {str(e)}")
                 else:
                     # Save new place using same structure as GooglePlacesSearchProvider
                     import uuid
                     place_uuid = str(uuid.uuid4()).upper()
                     
                     # Save directly to Firestore with proper structure (same as GooglePlacesSearchProvider)
-                    places_ref = place_storage.db.collection('places')
-                    place_data = {
-                        'id': place_uuid,
-                        'name': place.get("name", ""),
-                        'address': place.get("vicinity", ""),  # Nearby API uses 'vicinity'
-                        'city': "",  # Nearby API doesn't provide detailed address components
-                        'googlePlacesId': place.get("place_id"),
-                        'mapboxId': None,  # Not applicable for Google Places
-                        'coordinate': firestore.GeoPoint(location.get("lat"), location.get("lng")),
-                        'categories': place.get("types", []),
-                        'phone': None,  # Not provided by Nearby Search API
-                        'rating': place.get("rating"),
-                        'openHours': [],  # Not provided by Nearby Search API
-                        'description': place.get("vicinity", ""),
-                        'priceLevel': str(place.get("price_level")) if place.get("price_level") is not None else None,
-                        'reservable': None,
-                        'servesBreakfast': None,
-                        'servesLunch': None,
-                        'servesDinner': None,
-                        'instagram': None,
-                        'twitter': None
-                    }
+                    if place_storage.db:
+                        places_ref = place_storage.db.collection('places')
+                        place_data = {
+                            'id': place_uuid,
+                            'name': place.get("name", ""),
+                            'address': place.get("vicinity", ""),  # Nearby API uses 'vicinity'
+                            'city': "",  # Nearby API doesn't provide detailed address components
+                            'googlePlacesId': place.get("place_id"),
+                            'mapboxId': None,  # Not applicable for Google Places
+                            'coordinate': firestore.GeoPoint(location.get("lat"), location.get("lng")),
+                            'categories': place.get("types", []),
+                            'phone': None,  # Not provided by Nearby Search API
+                            'rating': place.get("rating"),
+                            'openHours': [],  # Not provided by Nearby Search API
+                            'description': place.get("vicinity", ""),
+                            'priceLevel': str(place.get("price_level")) if place.get("price_level") is not None else None,
+                            'reservable': None,
+                            'servesBreakfast': None,
+                            'servesLunch': None,
+                            'servesDinner': None,
+                            'instagram': None,
+                            'twitter': None
+                        }
+                        
+                        # Create document with specific ID (same as GooglePlacesSearchProvider)
+                        doc_ref = places_ref.document(place_uuid)
+                        doc_ref.set(place_data)
+                        saved_to_firestore += 1
+                        logger.debug(f"Saved new place to Firestore: {search_result.name} (ID: {place_uuid})")
                     
-                    # Create document with specific ID (same as GooglePlacesSearchProvider)
-                    doc_ref = places_ref.document(place_uuid)
-                    doc_ref.set(place_data)
-                    saved_to_firestore += 1
-                    logger.debug(f"Saved new place to Firestore: {search_result.name} (ID: {place_uuid})")
-                
-                # Also save to Whoosh for search functionality
-                if whoosh_provider is not None:
-                    try:
-                        whoosh_provider.save_place(search_result)
-                        saved_to_whoosh += 1
-                        logger.debug(f"Saved place to Whoosh index: {search_result.name}")
-                    except Exception as e:
-                        logger.error(f"Error saving to Whoosh index: {str(e)}")
+                    # Always save to Whoosh for immediate search functionality
+                    if whoosh_provider is not None:
+                        try:
+                            whoosh_provider.save_place(search_result)
+                            saved_to_whoosh += 1
+                            logger.debug(f"Saved place to Whoosh index: {search_result.name}")
+                        except Exception as e:
+                            logger.error(f"Error saving to Whoosh index: {str(e)}")
                         
             except Exception as e:
                 logger.error(f"Error in caching process for place {place.get('name', 'Unknown')}: {str(e)}")
