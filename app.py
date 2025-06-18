@@ -218,43 +218,54 @@ def get_place_details():
         # Save to local database if not already there
         if provider != 'local' and whoosh_provider is not None:
             try:
-                # Convert DetailPlace to SearchResult for saving to Whoosh only
-                search_result = SearchResult(
+                # First save to Firestore to get the correct document ID
+                storage = PlaceStorage()
+                # Create SearchResult with original external ID for duplicate checking
+                search_result_for_duplicate_check = SearchResult(
                     name=detail_place.name,
                     address=detail_place.address,
                     latitude=detail_place.coordinate.latitude,
                     longitude=detail_place.coordinate.longitude,
-                    place_id=detail_place.id,
+                    place_id=detail_place.id,  # Original external ID for duplicate checking
                     source=provider
                 )
                 
-                # Save to Whoosh index
-                whoosh_provider.save_place(search_result)
-                logger.info(f"Saved place to Whoosh index: {detail_place.name}")
+                # Check if place already exists in Firestore
+                existing_id = storage._check_for_duplicate(search_result_for_duplicate_check)
+                firestore_document_id = None
                 
-                # Save to Firestore using the DetailPlace object directly
-                try:
-                    storage = PlaceStorage()
-                    # Check if place already exists in Firestore
-                    existing_id = storage._check_for_duplicate(search_result)
-                    if not existing_id:
-                        # Get Firestore connection from storage
-                        if hasattr(storage, 'db'):
-                            places_ref = storage.db.collection('places')
-                            # Use the DetailPlace to_firestore_dict method
-                            place_data = detail_place.to_firestore_dict()
-                            # Save to Firestore
-                            doc_ref = places_ref.add(place_data)
-                            firestore_id = doc_ref[1].id
-                            # Update the detail_place ID to match the Firestore ID
-                            detail_place.id = firestore_id
-                            logger.info(f"Saved place to Firestore with ID: {firestore_id}")
-                    else:
-                        logger.info(f"Place already exists in Firestore with ID: {existing_id}")
-                        # Update the detail_place ID to match the existing ID
-                        detail_place.id = existing_id
-                except Exception as e:
-                    logger.error(f"Error saving to Firestore: {str(e)}")
+                if not existing_id:
+                    # Get Firestore connection from storage
+                    if hasattr(storage, 'db'):
+                        places_ref = storage.db.collection('places')
+                        # Use the DetailPlace to_firestore_dict method
+                        place_data = detail_place.to_firestore_dict()
+                        # Save to Firestore
+                        doc_ref = places_ref.add(place_data)
+                        firestore_document_id = doc_ref[1].id
+                        logger.info(f"Saved place to Firestore with ID: {firestore_document_id}")
+                else:
+                    firestore_document_id = existing_id
+                    logger.info(f"Place already exists in Firestore with ID: {existing_id}")
+                
+                # Now create SearchResult with Firestore document ID for Whoosh
+                if firestore_document_id:
+                    search_result_for_whoosh = SearchResult(
+                        name=detail_place.name,
+                        address=detail_place.address,
+                        latitude=detail_place.coordinate.latitude,
+                        longitude=detail_place.coordinate.longitude,
+                        place_id=firestore_document_id,  # Use Firestore document ID for Whoosh
+                        source=provider
+                    )
+                    
+                    # Save to Whoosh index with Firestore document ID
+                    whoosh_provider.save_place(search_result_for_whoosh)
+                    logger.info(f"Saved place to Whoosh index with Firestore ID: {detail_place.name}")
+                    
+                    # Update the detail_place ID to match the Firestore ID
+                    detail_place.id = firestore_document_id
+                    
             except Exception as e:
                 logger.error(f"Error saving place: {str(e)}")
                 
@@ -481,16 +492,12 @@ def nearby_places():
                 # Check if this place already exists (same pattern as GooglePlacesSearchProvider)
                 existing_id = place_storage._check_for_duplicate(search_result)
                 
+                # Determine the Firestore document ID to use for Whoosh
+                firestore_document_id = None
+                
                 if existing_id:
                     logger.debug(f"Place already exists in database: {search_result.name} (ID: {existing_id})")
-                    # Even if it exists in Firestore, ensure it's in Whoosh for immediate search
-                    if whoosh_provider is not None:
-                        try:
-                            whoosh_provider.save_place(search_result)
-                            saved_to_whoosh += 1
-                            logger.debug(f"Ensured place exists in Whoosh index: {search_result.name}")
-                        except Exception as e:
-                            logger.debug(f"Place already in Whoosh or error: {str(e)}")
+                    firestore_document_id = existing_id
                 else:
                     # Save new place using same structure as GooglePlacesSearchProvider
                     import uuid
@@ -525,16 +532,26 @@ def nearby_places():
                         doc_ref = places_ref.document(place_uuid)
                         doc_ref.set(place_data)
                         saved_to_firestore += 1
+                        firestore_document_id = place_uuid
                         logger.debug(f"Saved new place to Firestore: {search_result.name} (ID: {place_uuid})")
-                    
-                    # Always save to Whoosh for immediate search functionality
-                    if whoosh_provider is not None:
-                        try:
-                            whoosh_provider.save_place(search_result)
-                            saved_to_whoosh += 1
-                            logger.debug(f"Saved place to Whoosh index: {search_result.name}")
-                        except Exception as e:
-                            logger.error(f"Error saving to Whoosh index: {str(e)}")
+                
+                # Save to Whoosh with Firestore document ID
+                if whoosh_provider is not None and firestore_document_id:
+                    try:
+                        # Create SearchResult with Firestore document ID for Whoosh
+                        search_result_for_whoosh = SearchResult(
+                            name=place.get("name", ""),
+                            address=place.get("vicinity", ""),
+                            latitude=location.get("lat"),
+                            longitude=location.get("lng"),
+                            place_id=firestore_document_id,  # Use Firestore document ID
+                            source="google"
+                        )
+                        whoosh_provider.save_place(search_result_for_whoosh)
+                        saved_to_whoosh += 1
+                        logger.debug(f"Saved place to Whoosh index with Firestore ID: {search_result.name}")
+                    except Exception as e:
+                        logger.error(f"Error saving to Whoosh index: {str(e)}")
                         
             except Exception as e:
                 logger.error(f"Error in caching process for place {place.get('name', 'Unknown')}: {str(e)}")
