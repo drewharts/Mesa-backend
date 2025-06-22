@@ -323,9 +323,59 @@ def reindex_places():
         # Reindex from Firestore
         index_places_from_firestore()
         logger.info("Reindex completed successfully")
+        
+        # Force refresh the index to ensure we're using the latest data
+        if whoosh_provider is not None:
+            whoosh_provider.force_refresh()
+            logger.info("Whoosh index refreshed after reindexing")
+        
         return jsonify({"status": "success", "message": "Reindex completed successfully"}), 200
     except Exception as e:
         logger.error(f"Error during reindex: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/admin/index-status', methods=['GET'])
+def get_index_status():
+    """Admin endpoint to check the Whoosh index status"""
+    try:
+        if whoosh_provider is None:
+            return jsonify({
+                "status": "error", 
+                "message": "Whoosh provider not available"
+            }), 503
+        
+        index_info = whoosh_provider.get_index_info()
+        return jsonify({
+            "status": "success",
+            "index_info": index_info
+        }), 200
+    except Exception as e:
+        logger.error(f"Error getting index status: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/admin/refresh-index', methods=['POST'])
+def refresh_index():
+    """Admin endpoint to force refresh the Whoosh index"""
+    try:
+        if whoosh_provider is None:
+            return jsonify({
+                "status": "error", 
+                "message": "Whoosh provider not available"
+            }), 503
+        
+        whoosh_provider.force_refresh()
+        logger.info("Manual index refresh completed")
+        
+        # Get updated index info
+        index_info = whoosh_provider.get_index_info()
+        
+        return jsonify({
+            "status": "success", 
+            "message": "Index refreshed successfully",
+            "index_info": index_info
+        }), 200
+    except Exception as e:
+        logger.error(f"Error refreshing index: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/nearby-places', methods=['GET'])

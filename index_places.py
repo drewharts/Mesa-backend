@@ -72,6 +72,10 @@ def index_places_from_firestore():
         
         logger.info("Indexing completed successfully")
         
+        # Force refresh the index to ensure we're using the latest data
+        whoosh_provider.force_refresh()
+        logger.info("Whoosh index refreshed after indexing")
+        
     except Exception as e:
         logger.error(f"Error indexing places: {str(e)}", exc_info=True)
 

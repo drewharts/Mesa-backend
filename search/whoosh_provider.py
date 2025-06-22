@@ -6,6 +6,7 @@ import whoosh.qparser
 from whoosh.analysis import StandardAnalyzer
 from typing import List, Dict, Any, Optional
 import uuid
+import time
 from firebase_admin import firestore
 
 from search.base import SearchProvider, SearchResult
@@ -20,6 +21,7 @@ class WhooshSearchProvider(SearchProvider):
         logger.debug(f"Initializing WhooshSearchProvider with index path: {index_path}")
         self._ensure_index()
         self.storage = PlaceStorage()
+        self._last_index_refresh = time.time()
         
     def _ensure_index(self):
         if not os.path.exists(self.index_path):
@@ -37,7 +39,55 @@ class WhooshSearchProvider(SearchProvider):
             whoosh.index.create_in(self.index_path, schema)
         else:
             logger.debug(f"Using existing Whoosh index at {self.index_path}")
-        self.ix = whoosh.index.open_dir(self.index_path)
+        self._refresh_index()
+    
+    def _refresh_index(self):
+        """Force refresh the index to ensure we're using the latest data."""
+        try:
+            # Close existing index if it exists
+            if hasattr(self, 'ix'):
+                try:
+                    self.ix.close()
+                except:
+                    pass
+            
+            # Open the index fresh
+            self.ix = whoosh.index.open_dir(self.index_path)
+            self._last_index_refresh = time.time()
+            logger.debug(f"Whoosh index refreshed at {self._last_index_refresh}")
+        except Exception as e:
+            logger.error(f"Error refreshing Whoosh index: {str(e)}")
+            raise
+    
+    def get_index_info(self) -> Dict[str, Any]:
+        """Get information about the current index state."""
+        try:
+            if not hasattr(self, 'ix'):
+                return {"error": "Index not initialized"}
+            
+            # Get index stats
+            stats = {
+                "index_path": self.index_path,
+                "last_refresh": self._last_index_refresh,
+                "last_refresh_readable": time.ctime(self._last_index_refresh),
+                "doc_count": self.ix.doc_count(),
+                "is_empty": self.ix.is_empty(),
+                "schema_fields": list(self.ix.schema.names())
+            }
+            
+            # Get file modification times
+            if os.path.exists(self.index_path):
+                toc_files = [f for f in os.listdir(self.index_path) if f.endswith('.toc')]
+                if toc_files:
+                    latest_toc = max(toc_files, key=lambda f: os.path.getmtime(os.path.join(self.index_path, f)))
+                    stats["latest_toc_file"] = latest_toc
+                    stats["latest_toc_time"] = os.path.getmtime(os.path.join(self.index_path, latest_toc))
+                    stats["latest_toc_time_readable"] = time.ctime(stats["latest_toc_time"])
+            
+            return stats
+        except Exception as e:
+            logger.error(f"Error getting index info: {str(e)}")
+            return {"error": str(e)}
 
     def _is_same_place(self, place1: SearchResult, place2: SearchResult) -> bool:
         """Check if two places are likely the same based on name, address, and coordinates."""
@@ -149,4 +199,12 @@ class WhooshSearchProvider(SearchProvider):
         logger.info("Clearing Whoosh index")
         with self.ix.writer() as writer:
             writer.delete_by_query(whoosh.qparser.QueryParser("name", self.ix.schema).parse("*"))
-        logger.info("Whoosh index cleared successfully") 
+        logger.info("Whoosh index cleared successfully")
+        # Force refresh after clearing
+        self._refresh_index()
+    
+    def force_refresh(self) -> None:
+        """Force refresh the index to ensure we're using the latest data."""
+        logger.info("Forcing Whoosh index refresh")
+        self._refresh_index()
+        logger.info("Whoosh index refresh completed") 
