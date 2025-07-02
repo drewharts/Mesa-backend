@@ -1,10 +1,12 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 import logging
 import tempfile
 import sys
 import requests
+import time
 from firebase_admin import firestore
 from search import WhooshSearchProvider, MapboxSearchProvider, GooglePlacesSearchProvider, SearchOrchestrator
 from search.storage import PlaceStorage
@@ -23,6 +25,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()  # Load environment variables
 
 app = Flask(__name__)
+# Enable CORS for all routes
+CORS(app)
 
 # Create a persistent directory for Whoosh index
 whoosh_index_dir = os.getenv('WHOOSH_INDEX_DIR', 'whoosh_index')
@@ -690,12 +694,33 @@ def process_url():
     }
     """
     try:
-        # Get JSON data
-        data = request.get_json()
+        # Get JSON data with force=True to handle parsing errors
+        try:
+            data = request.get_json(force=True)
+        except Exception as json_error:
+            logger.error(f"JSON parsing error: {str(json_error)}")
+            # Try to get raw data and clean it
+            raw_data = request.get_data(as_text=True)
+            logger.debug(f"Raw request data: {repr(raw_data)}")
+            
+            # Try to parse after cleaning common issues
+            import json
+            import re
+            # Remove control characters
+            cleaned_data = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', raw_data)
+            try:
+                data = json.loads(cleaned_data)
+            except:
+                return jsonify({"error": "Invalid JSON in request body"}), 400
+        
         if not data or 'url' not in data:
             return jsonify({"error": "Missing 'url' in request body"}), 400
         
         url = data['url']
+        
+        # Clean the URL of any control characters
+        import re
+        url = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', url).strip()
         
         # Initialize processors
         orchestrator = URLProcessorOrchestrator()
@@ -752,6 +777,207 @@ def get_supported_platforms():
     return jsonify({
         "supported_platforms": orchestrator.get_supported_platforms()
     })
+
+@app.route('/privacy-policy', methods=['GET'])
+def privacy_policy():
+    """Privacy policy endpoint required for TikTok API integration."""
+    privacy_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Privacy Policy - Mesa Location Services</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                line-height: 1.6;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                color: #333;
+            }
+            h1, h2 { color: #2c3e50; }
+            .last-updated { color: #666; font-style: italic; }
+            .section { margin-bottom: 2em; }
+        </style>
+    </head>
+    <body>
+        <h1>Privacy Policy</h1>
+        <p class="last-updated">Last updated: """ + time.strftime("%B %d, %Y") + """</p>
+        
+        <div class="section">
+            <h2>1. Information We Collect</h2>
+            <p>Mesa Location Services ("we," "our," or "us") is a location-based content discovery service. We collect the following information:</p>
+            <ul>
+                <li><strong>URL Data:</strong> Social media URLs you submit for location extraction</li>
+                <li><strong>Location Information:</strong> Geographic data extracted from social media content</li>
+                <li><strong>Usage Data:</strong> API usage statistics and error logs for service improvement</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>2. How We Use Your Information</h2>
+            <p>We use the collected information to:</p>
+            <ul>
+                <li>Extract and provide location information from social media content</li>
+                <li>Improve our location extraction algorithms</li>
+                <li>Maintain and optimize our service performance</li>
+                <li>Comply with legal obligations and platform requirements</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>3. Data Sharing and Third Parties</h2>
+            <p>We integrate with the following third-party services:</p>
+            <ul>
+                <li><strong>TikTok API:</strong> To extract video metadata and location information</li>
+                <li><strong>Google Maps API:</strong> For geocoding location names to coordinates</li>
+                <li><strong>Firestore:</strong> For data storage and caching</li>
+            </ul>
+            <p>We do not sell, trade, or otherwise transfer your personal information to third parties except as described in this policy.</p>
+        </div>
+
+        <div class="section">
+            <h2>4. Data Retention</h2>
+            <p>We retain extracted location data for caching purposes to improve service performance. Data is automatically purged based on usage patterns and storage limitations.</p>
+        </div>
+
+        <div class="section">
+            <h2>5. Data Security</h2>
+            <p>We implement appropriate security measures to protect your information, including:</p>
+            <ul>
+                <li>Encrypted data transmission (HTTPS)</li>
+                <li>Secure API authentication and access controls</li>
+                <li>Regular security monitoring and updates</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>6. Your Rights</h2>
+            <p>You have the right to:</p>
+            <ul>
+                <li>Request information about data we have collected</li>
+                <li>Request deletion of your data</li>
+                <li>Opt out of data collection</li>
+                <li>Contact us with privacy concerns</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>7. Children's Privacy</h2>
+            <p>Our service is not intended for children under 13. We do not knowingly collect personal information from children under 13.</p>
+        </div>
+
+        <div class="section">
+            <h2>8. Changes to This Policy</h2>
+            <p>We may update this privacy policy from time to time. The updated date will be reflected at the top of this page.</p>
+        </div>
+
+        <div class="section">
+            <h2>9. Contact Information</h2>
+            <p>If you have questions about this privacy policy or our data practices, please contact us at:</p>
+            <p>
+                <strong>Email:</strong> privacy@mesa-location-services.com<br>
+                <strong>Service:</strong> Mesa Location Services API<br>
+                <strong>Last Updated:</strong> """ + time.strftime("%B %d, %Y") + """
+            </p>
+        </div>
+
+        <div class="section">
+            <h2>10. Platform-Specific Information</h2>
+            <h3>TikTok Integration</h3>
+            <p>When processing TikTok URLs, we:</p>
+            <ul>
+                <li>Access only publicly available video metadata</li>
+                <li>Extract location information from video captions and metadata</li>
+                <li>Do not access private account information</li>
+                <li>Comply with TikTok's API terms of service</li>
+            </ul>
+        </div>
+    </body>
+    </html>
+    """
+    return privacy_content, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+@app.route('/terms-of-service', methods=['GET'])
+def terms_of_service():
+    """Terms of service endpoint."""
+    terms_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Terms of Service - Mesa Location Services</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                line-height: 1.6;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                color: #333;
+            }
+            h1, h2 { color: #2c3e50; }
+            .last-updated { color: #666; font-style: italic; }
+            .section { margin-bottom: 2em; }
+        </style>
+    </head>
+    <body>
+        <h1>Terms of Service</h1>
+        <p class="last-updated">Last updated: """ + time.strftime("%B %d, %Y") + """</p>
+        
+        <div class="section">
+            <h2>1. Acceptance of Terms</h2>
+            <p>By using Mesa Location Services, you agree to these terms of service.</p>
+        </div>
+
+        <div class="section">
+            <h2>2. Service Description</h2>
+            <p>Mesa Location Services is an API that extracts location information from social media URLs for legitimate business and research purposes.</p>
+        </div>
+
+        <div class="section">
+            <h2>3. Acceptable Use</h2>
+            <p>You agree to use our service only for:</p>
+            <ul>
+                <li>Legitimate business purposes</li>
+                <li>Research and analytics</li>
+                <li>Content discovery and mapping</li>
+                <li>Compliance with all applicable laws</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>4. Prohibited Uses</h2>
+            <p>You may not use our service to:</p>
+            <ul>
+                <li>Violate any laws or regulations</li>
+                <li>Infringe on privacy rights</li>
+                <li>Harvest personal information</li>
+                <li>Spam or abuse the service</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>5. Data and Privacy</h2>
+            <p>See our <a href="/privacy-policy">Privacy Policy</a> for information about data handling.</p>
+        </div>
+
+        <div class="section">
+            <h2>6. Service Availability</h2>
+            <p>We strive to maintain service availability but do not guarantee uninterrupted access.</p>
+        </div>
+
+        <div class="section">
+            <h2>7. Contact</h2>
+            <p>Questions about these terms? Contact us at: <strong>legal@mesa-location-services.com</strong></p>
+        </div>
+    </body>
+    </html>
+    """
+    return terms_content, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5002))
