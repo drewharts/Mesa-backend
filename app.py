@@ -13,6 +13,8 @@ from whoosh.fields import Schema, TEXT, ID, STORED
 from whoosh.analysis import StandardAnalyzer
 from search.detail_place import DetailPlace
 from search.search_result import SearchResult
+from url_processors.orchestrator import URLProcessorOrchestrator
+from url_processors.geocoding_service import GeocodingService
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -665,6 +667,91 @@ def nearby_places():
         return jsonify({
             "error": str(e)
         }), 500
+
+@app.route('/process-url', methods=['POST'])
+def process_url():
+    """Process a URL to extract location information.
+    
+    Expected JSON body:
+    {
+        "url": "https://www.tiktok.com/@user/video/123456"
+    }
+    
+    Returns:
+    {
+        "processor_type": "tiktok",
+        "data": {...},
+        "location_info": {
+            "location_name": "...",
+            "coordinates": [lat, lon],
+            "formatted_address": "...",
+            "place_id": "..."
+        }
+    }
+    """
+    try:
+        # Get JSON data
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({"error": "Missing 'url' in request body"}), 400
+        
+        url = data['url']
+        
+        # Initialize processors
+        orchestrator = URLProcessorOrchestrator()
+        geocoding_service = GeocodingService()
+        
+        # Process the URL
+        try:
+            result = orchestrator.process_url(url)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        
+        # If location info was extracted, try to geocode it
+        location_info = result.get('location_info')
+        if location_info:
+            # If we have a location name but no coordinates, geocode it
+            if location_info.get('location_name') and not location_info.get('coordinates'):
+                geocoded = geocoding_service.geocode_location(location_info['location_name'])
+                if geocoded:
+                    location_info.update({
+                        'coordinates': geocoded['coordinates'],
+                        'formatted_address': geocoded['formatted_address'],
+                        'place_id': geocoded['place_id'],
+                        'address_components': geocoded['components']
+                    })
+            
+            # If we have coordinates but no address, reverse geocode
+            elif location_info.get('coordinates') and not location_info.get('formatted_address'):
+                lat, lon = location_info['coordinates']
+                reverse_geocoded = geocoding_service.reverse_geocode(lat, lon)
+                if reverse_geocoded:
+                    location_info.update({
+                        'formatted_address': reverse_geocoded['formatted_address'],
+                        'place_id': reverse_geocoded['place_id'],
+                        'address_components': reverse_geocoded['components']
+                    })
+        
+        # Update result with enhanced location info
+        result['location_info'] = location_info
+        
+        # Log the processed URL
+        logger.info(f"Processed URL: {url}, Type: {result.get('processor_type')}, "
+                   f"Location found: {location_info is not None}")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error processing URL: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/process-url/platforms', methods=['GET'])
+def get_supported_platforms():
+    """Get list of supported platforms for URL processing."""
+    orchestrator = URLProcessorOrchestrator()
+    return jsonify({
+        "supported_platforms": orchestrator.get_supported_platforms()
+    })
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5002))
