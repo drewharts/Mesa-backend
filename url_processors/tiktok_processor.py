@@ -17,14 +17,18 @@ class TikTokProcessor(URLProcessor):
         # TikTok API credentials
         self.client_key = os.environ.get('TIKTOK_CLIENT_KEY')
         self.client_secret = os.environ.get('TIKTOK_CLIENT_SECRET')
-        self.access_token = os.environ.get('TIKTOK_ACCESS_TOKEN')
         
         # API endpoints
         self.base_url = "https://open.tiktokapis.com/v2"
+        self.token_url = "https://open.tiktokapis.com/v2/oauth/token/"
         self.video_query_url = f"{self.base_url}/video/query/"
         
         # For public web API (alternative approach)
         self.oembed_url = "https://www.tiktok.com/oembed"
+        
+        # Token cache
+        self._cached_token = None
+        self._token_expires_at = 0
         
     def can_process(self, url: str) -> bool:
         """Check if URL is a TikTok URL."""
@@ -69,7 +73,7 @@ class TikTokProcessor(URLProcessor):
                 result["hashtags"] = self._extract_hashtags(result["caption"])
                 
                 # If we have API credentials, try to get more detailed info
-                if self.access_token:
+                if self.client_key and self.client_secret:
                     detailed_data = self._fetch_video_details(url)
                     if detailed_data:
                         result.update(detailed_data)
@@ -80,7 +84,7 @@ class TikTokProcessor(URLProcessor):
             logger.error(f"Error fetching oEmbed data: {str(e)}")
         
         # Fallback: If oEmbed fails and we have API credentials, use the official API
-        if self.access_token:
+        if self.client_key and self.client_secret:
             try:
                 return self._fetch_video_details(url)
             except Exception as e:
@@ -117,16 +121,61 @@ class TikTokProcessor(URLProcessor):
             logger.error(f"Error calling oEmbed API: {str(e)}")
             return None
     
+    def _get_access_token(self) -> Optional[str]:
+        """Get a fresh access token or return cached one if still valid."""
+        current_time = time.time()
+        
+        # Return cached token if still valid (with 5 minute buffer)
+        if self._cached_token and current_time < (self._token_expires_at - 300):
+            return self._cached_token
+        
+        if not self.client_key or not self.client_secret:
+            logger.error("TikTok client credentials not configured")
+            return None
+        
+        try:
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cache-Control": "no-cache"
+            }
+            
+            data = {
+                "client_key": self.client_key,
+                "client_secret": self.client_secret,
+                "grant_type": "client_credentials"
+            }
+            
+            response = requests.post(self.token_url, headers=headers, data=data, timeout=10)
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                access_token = token_data.get("access_token")
+                expires_in = token_data.get("expires_in", 7200)
+                
+                if access_token:
+                    self._cached_token = access_token
+                    self._token_expires_at = current_time + expires_in
+                    logger.info(f"TikTok access token refreshed, expires in {expires_in} seconds")
+                    return access_token
+            else:
+                logger.error(f"Failed to get TikTok access token: {response.status_code} - {response.text}")
+                
+        except Exception as e:
+            logger.error(f"Error getting TikTok access token: {str(e)}")
+        
+        return None
+    
     def _fetch_video_details(self, url: str) -> Dict[str, Any]:
         """Fetch detailed video data using TikTok's official API (requires auth)."""
-        if not self.access_token:
-            raise ValueError("TikTok API access token not configured")
+        access_token = self._get_access_token()
+        if not access_token:
+            raise ValueError("Could not obtain TikTok API access token")
         
         video_id = self._extract_video_id(url)
         
         # TikTok API v2 request
         headers = {
-            "Authorization": f"Bearer {self.access_token}",
+            "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
         
