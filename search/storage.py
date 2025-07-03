@@ -340,4 +340,124 @@ class PlaceStorage:
                 return f"dummy_id_{place.place_id}"
         except Exception as e:
             logger.error(f"Error saving place: {str(e)}")
-            return f"dummy_id_{place.place_id}" 
+            return f"dummy_id_{place.place_id}"
+
+    def add_place_to_user_external_places(self, user_id: str, place: SearchResult) -> tuple:
+        """Add a place to a user's externalPlaces subcollection and save to main places collection.
+        
+        Returns:
+            tuple: (place_id, external_place_doc_id) or (None, None) on error
+        """
+        try:
+            if not hasattr(self, 'db') or not self.db:
+                logger.error("Firestore database not initialized")
+                return None, None
+                
+            # Use save_place_old which properly handles duplicates and uses the correct structure
+            place_doc_id = self.save_place_old(place)
+            
+            if not place_doc_id or place_doc_id.startswith('dummy_id_'):
+                logger.error("Failed to save place to main collection")
+                return None, None
+            
+            # Add to user's externalPlaces subcollection
+            user_ref = self.db.collection('users').document(user_id)
+            external_places_ref = user_ref.collection('externalPlaces')
+            
+            # Create the external place document with minimal reference data
+            external_place_data = {
+                'placeId': place_doc_id,  # Reference to the main places collection document
+                'name': place.name,
+                'address': place.address,
+                'coordinate': firestore.GeoPoint(place.latitude, place.longitude),
+                'source': place.source,
+                'addedAt': firestore.SERVER_TIMESTAMP
+            }
+            
+            # Check if place already exists in user's external places
+            existing_external = external_places_ref.where('placeId', '==', place_doc_id).get()
+            if existing_external:
+                logger.info(f"Place {place_doc_id} already exists in user {user_id}'s externalPlaces")
+                return place_doc_id, existing_external[0].id
+            
+            # Add to externalPlaces
+            doc_ref = external_places_ref.add(external_place_data)
+            external_doc_id = doc_ref[1].id
+            logger.info(f"Added place {place_doc_id} to user {user_id}'s externalPlaces")
+            
+            return place_doc_id, external_doc_id
+            
+        except Exception as e:
+            logger.error(f"Error adding place to user's externalPlaces: {str(e)}")
+            return None, None
+
+    def trigger_whoosh_reindex(self):
+        """Trigger a Whoosh index rebuild to include new places.
+        
+        Note: This requires the Whoosh provider to be initialized and available.
+        In a production environment, consider using a background task queue.
+        """
+        try:
+            from search.whoosh_provider import WhooshSearchProvider
+            
+            # Create a new Whoosh provider instance
+            whoosh_provider = WhooshSearchProvider()
+            
+            # Clear and rebuild the index
+            whoosh_provider.clear_index()
+            logger.info("Whoosh index cleared")
+            
+            # Get all places from Firestore and index them
+            if hasattr(self, 'db') and self.db:
+                places_ref = self.db.collection('places')
+                places = places_ref.get()
+                
+                # Index each place
+                with whoosh_provider.ix.writer() as writer:
+                    for place_doc in places:
+                        place_data = place_doc.to_dict()
+                        
+                        # Extract coordinate if available
+                        coordinate = place_data.get('coordinate')
+                        if coordinate:
+                            latitude = coordinate.latitude
+                            longitude = coordinate.longitude
+                        else:
+                            latitude = longitude = 0.0
+                        
+                        # Add to Whoosh index with correct structure
+                        writer.add_document(
+                            name=place_data.get('name', ''),
+                            place_id=place_doc.id,  # Use Firestore document ID
+                            address=place_data.get('address', ''),
+                            latitude=latitude,
+                            longitude=longitude
+                        )
+                
+                logger.info(f"Indexed {len(places)} places in Whoosh")
+                
+                # Force refresh the index
+                whoosh_provider.force_refresh()
+                return True
+            else:
+                logger.error("Firestore database not available for reindexing")
+                return False
+                
+        except ImportError:
+            logger.error("WhooshSearchProvider not available, trying subprocess method")
+            # Fallback to subprocess method
+            import subprocess
+            import os
+            
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)
+            index_script = os.path.join(project_root, 'index_places.py')
+            
+            result = subprocess.run(['python', index_script], 
+                                  capture_output=True, text=True, cwd=project_root)
+            
+            return result.returncode == 0
+            
+        except Exception as e:
+            logger.error(f"Error triggering Whoosh reindex: {str(e)}")
+            return False 
