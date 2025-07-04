@@ -169,13 +169,13 @@ class PlaceStorage:
             if place.place_id:
                 # Check for Google Places ID
                 if place.source in ['google', 'google_places']:
-                    existing_places = places_ref.where('googlePlacesId', '==', place.place_id).get()
+                    existing_places = places_ref.where('google_place_id', '==', place.place_id).get()
                     if existing_places:
                         return existing_places[0].id
                 
                 # Check for Mapbox ID
                 elif place.source == 'mapbox':
-                    existing_places = places_ref.where('mapboxId', '==', place.place_id).get()
+                    existing_places = places_ref.where('mapbox_id', '==', place.place_id).get()
                     if existing_places:
                         return existing_places[0].id
             
@@ -188,35 +188,124 @@ class PlaceStorage:
             # Check each place with the same name for proximity
             for doc in places_with_same_name:
                 doc_data = doc.to_dict()
-                doc_coordinate = doc_data.get('coordinate')
                 
-                if doc_coordinate:
-                    # Calculate distance between coordinates (in feet)
-                    # Using the Haversine formula to calculate distance between two points on Earth
-                    lat1, lon1 = place.latitude, place.longitude
-                    lat2, lon2 = doc_coordinate.latitude, doc_coordinate.longitude
-                    
-                    # Convert to radians
-                    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-                    
-                    # Haversine formula
-                    dlat = lat2 - lat1
-                    dlon = lon2 - lon1
-                    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-                    c = 2 * math.asin(math.sqrt(a))
-                    r = 20902231  # Radius of earth in feet
-                    distance = c * r
-                    
-                    # If within 100 feet, it's a duplicate
-                    if distance <= 100:
-                        logger.info(f"Found duplicate place by name and proximity: {place.name}")
-                        return doc.id
+                # Handle both new and old coordinate formats
+                coordinates = doc_data.get('coordinates')
+                if coordinates and isinstance(coordinates, dict):
+                    lat2, lon2 = coordinates.get('latitude', 0), coordinates.get('longitude', 0)
+                else:
+                    doc_coordinate = doc_data.get('coordinate')
+                    if doc_coordinate and hasattr(doc_coordinate, 'latitude'):
+                        lat2, lon2 = doc_coordinate.latitude, doc_coordinate.longitude
+                    else:
+                        continue
+                
+                # Calculate distance between coordinates (in feet)
+                lat1, lon1 = place.latitude, place.longitude
+                
+                # Convert to radians
+                lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+                
+                # Haversine formula
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                c = 2 * math.asin(math.sqrt(a))
+                r = 20902231  # Radius of earth in feet
+                distance = c * r
+                
+                # If within 100 feet, it's a duplicate
+                if distance <= 100:
+                    logger.info(f"Found duplicate place by name and proximity: {place.name}")
+                    return doc.id
             
             # No match found
             return None
             
         except Exception as e:
             logger.error(f"Error checking for duplicates: {str(e)}")
+            return None
+
+    def check_for_existing_place_by_tiktok_url(self, tiktok_url: str) -> Optional[str]:
+        """Check if a place already exists with the given TikTok URL.
+        Returns the existing place's ID if found, None otherwise."""
+        try:
+            if not hasattr(self, 'db') or not self.db:
+                return None
+                
+            places_ref = self.db.collection('places')
+            
+            # Get all places that have tiktok_videos
+            places_with_videos = places_ref.where('tiktok_videos', '>', []).get()
+            
+            for doc in places_with_videos:
+                place_data = doc.to_dict()
+                tiktok_videos = place_data.get('tiktok_videos', [])
+                
+                # Check if any video has the same URL
+                for video in tiktok_videos:
+                    if video.get('url') == tiktok_url:
+                        logger.info(f"Found existing place {doc.id} with TikTok URL: {tiktok_url}")
+                        return doc.id
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error checking for existing TikTok URL: {str(e)}")
+            return None
+
+    def check_for_existing_place_by_name_and_location(self, name: str, latitude: float, longitude: float) -> Optional[str]:
+        """Check if a place already exists with similar name and location.
+        Returns the existing place's ID if found, None otherwise."""
+        try:
+            if not hasattr(self, 'db') or not self.db:
+                return None
+                
+            places_ref = self.db.collection('places')
+            
+            # Normalize the search name
+            normalized_search_name = self._normalize_string(name)
+            
+            # Get all places and check for similar names and proximity
+            # Note: In production, consider using a more efficient query
+            all_places = places_ref.limit(1000).get()
+            
+            for doc in all_places:
+                place_data = doc.to_dict()
+                place_name = place_data.get('name', '')
+                normalized_place_name = self._normalize_string(place_name)
+                
+                # Check for similar names (exact match or contains)
+                name_match = (normalized_search_name == normalized_place_name or 
+                             normalized_search_name in normalized_place_name or
+                             normalized_place_name in normalized_search_name)
+                
+                if name_match:
+                    # Check proximity
+                    coordinates = place_data.get('coordinates')
+                    if coordinates and isinstance(coordinates, dict):
+                        place_lat = coordinates.get('latitude', 0)
+                        place_lon = coordinates.get('longitude', 0)
+                    else:
+                        doc_coordinate = place_data.get('coordinate')
+                        if doc_coordinate and hasattr(doc_coordinate, 'latitude'):
+                            place_lat = doc_coordinate.latitude
+                            place_lon = doc_coordinate.longitude
+                        else:
+                            continue
+                    
+                    # Calculate distance
+                    distance = self._calculate_distance(latitude, longitude, place_lat, place_lon)
+                    
+                    # If within 500 meters (broader than the 100 feet used elsewhere)
+                    if distance <= 500:
+                        logger.info(f"Found existing place by name similarity and proximity: {place_name}")
+                        return doc.id
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error checking for existing place by name and location: {str(e)}")
             return None
 
     def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
