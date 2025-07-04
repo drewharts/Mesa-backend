@@ -171,13 +171,15 @@ class PlaceStorage:
                 if place.source in ['google', 'google_places']:
                     existing_places = places_ref.where('google_place_id', '==', place.place_id).get()
                     if existing_places:
-                        return existing_places[0].id
+                        # Always return uppercase ID for consistency
+                        return existing_places[0].id.upper() if existing_places[0].id else existing_places[0].id
                 
                 # Check for Mapbox ID
                 elif place.source == 'mapbox':
                     existing_places = places_ref.where('mapbox_id', '==', place.place_id).get()
                     if existing_places:
-                        return existing_places[0].id
+                        # Always return uppercase ID for consistency
+                        return existing_places[0].id.upper() if existing_places[0].id else existing_places[0].id
             
             # If no match by ID, check by name and proximity
             normalized_name = self._normalize_string(place.name)
@@ -217,7 +219,8 @@ class PlaceStorage:
                 # If within 100 feet, it's a duplicate
                 if distance <= 100:
                     logger.info(f"Found duplicate place by name and proximity: {place.name}")
-                    return doc.id
+                    # Always return uppercase ID for consistency
+                    return doc.id.upper() if doc.id else doc.id
             
             # No match found
             return None
@@ -246,7 +249,8 @@ class PlaceStorage:
                 for video in tiktok_videos:
                     if video.get('url') == tiktok_url:
                         logger.info(f"Found existing place {doc.id} with TikTok URL: {tiktok_url}")
-                        return doc.id
+                        # Always return uppercase ID for consistency
+                        return doc.id.upper() if doc.id else doc.id
             
             return None
             
@@ -300,7 +304,8 @@ class PlaceStorage:
                     # If within 500 meters (broader than the 100 feet used elsewhere)
                     if distance <= 500:
                         logger.info(f"Found existing place by name similarity and proximity: {place_name}")
-                        return doc.id
+                        # Always return uppercase ID for consistency
+                        return doc.id.upper() if doc.id else doc.id
             
             return None
             
@@ -454,8 +459,8 @@ class PlaceStorage:
                     self._append_tiktok_videos_to_place(existing_id, tiktok_videos)
                 return existing_id
             
-            # Generate UUID for the place
-            place_uuid = str(uuid.uuid4())
+            # Generate UUID for the place - MUST BE UPPERCASE
+            place_uuid = str(uuid.uuid4()).upper()
             
             # Extract additional data
             additional_data = place.additional_data or {}
@@ -629,9 +634,10 @@ class PlaceStorage:
                                 latitude = longitude = 0.0
                         
                         # Add to Whoosh index with correct structure
+                        # IMPORTANT: Ensure place_id is uppercase for consistency
                         writer.add_document(
                             name=place_data.get('name', ''),
-                            place_id=place_doc.id,  # Use Firestore document ID
+                            place_id=place_doc.id.upper() if place_doc.id else place_doc.id,  # Ensure uppercase
                             address=place_data.get('address', ''),
                             latitude=latitude,
                             longitude=longitude
