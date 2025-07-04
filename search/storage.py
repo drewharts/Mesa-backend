@@ -340,4 +340,238 @@ class PlaceStorage:
                 return f"dummy_id_{place.place_id}"
         except Exception as e:
             logger.error(f"Error saving place: {str(e)}")
-            return f"dummy_id_{place.place_id}" 
+            return f"dummy_id_{place.place_id}"
+
+    def save_place_with_tiktok_data(self, place: SearchResult, tiktok_videos: list = None) -> str:
+        """Save a place to Firestore using the correct format with TikTok video support.
+        
+        Args:
+            place: SearchResult object with place data
+            tiktok_videos: List of TikTok video objects (optional)
+            
+        Returns:
+            str: Document ID of the saved place or None on error
+        """
+        try:
+            if not hasattr(self, 'db') or not self.db:
+                logger.error("Firestore database not initialized")
+                return None
+                
+            # Check for duplicates first
+            existing_id = self._check_for_duplicate(place)
+            if existing_id:
+                # If place exists and we have TikTok videos, append them
+                if tiktok_videos:
+                    self._append_tiktok_videos_to_place(existing_id, tiktok_videos)
+                return existing_id
+            
+            # Generate UUID for the place
+            place_uuid = str(uuid.uuid4())
+            
+            # Extract additional data
+            additional_data = place.additional_data or {}
+            
+            # Build place data in the correct format
+            place_data = {
+                'id': place_uuid,
+                'name': place.name,
+                'address': place.address,
+                'city': additional_data.get('city', ''),
+                'coordinates': {
+                    'latitude': place.latitude,
+                    'longitude': place.longitude
+                },
+                'categories': additional_data.get('categories', []) or additional_data.get('types', []),
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'source': place.source
+            }
+            
+            # Add source-specific IDs
+            if place.source in ['google', 'google_places']:
+                place_data['google_place_id'] = place.place_id
+            elif place.source == 'mapbox':
+                place_data['mapbox_id'] = place.place_id
+            
+            # Add TikTok videos if provided
+            if tiktok_videos:
+                place_data['tiktok_videos'] = tiktok_videos
+            
+            # Add other optional fields
+            if additional_data.get('phone'):
+                place_data['phone'] = additional_data['phone']
+            if additional_data.get('rating'):
+                place_data['rating'] = additional_data['rating']
+            if additional_data.get('description'):
+                place_data['description'] = additional_data['description']
+                
+            # Save to Firestore using the UUID as document ID
+            places_ref = self.db.collection('places')
+            doc_ref = places_ref.document(place_uuid)
+            doc_ref.set(place_data)
+            
+            logger.info(f"Saved place {place.name} with ID {place_uuid}")
+            return place_uuid
+            
+        except Exception as e:
+            logger.error(f"Error saving place with TikTok data: {str(e)}")
+            return None
+
+    def _append_tiktok_videos_to_place(self, place_id: str, tiktok_videos: list):
+        """Append TikTok videos to an existing place."""
+        try:
+            place_ref = self.db.collection('places').document(place_id)
+            place_doc = place_ref.get()
+            
+            if place_doc.exists:
+                place_data = place_doc.to_dict()
+                existing_videos = place_data.get('tiktok_videos', [])
+                
+                # Get existing video IDs to avoid duplicates
+                existing_video_ids = {video.get('video_id') for video in existing_videos}
+                
+                # Add new videos that don't already exist
+                new_videos = [video for video in tiktok_videos 
+                             if video.get('video_id') not in existing_video_ids]
+                
+                if new_videos:
+                    updated_videos = existing_videos + new_videos
+                    place_ref.update({'tiktok_videos': updated_videos})
+                    logger.info(f"Added {len(new_videos)} new TikTok videos to place {place_id}")
+                
+        except Exception as e:
+            logger.error(f"Error appending TikTok videos to place: {str(e)}")
+
+    def add_place_to_user_external_places(self, user_id: str, place: SearchResult, tiktok_videos: list = None) -> tuple:
+        """Add a place to a user's externalPlaces subcollection and save to main places collection.
+        
+        Args:
+            user_id: User ID
+            place: SearchResult object
+            tiktok_videos: Optional list of TikTok video data
+            
+        Returns:
+            tuple: (place_id, external_place_doc_id) or (None, None) on error
+        """
+        try:
+            if not hasattr(self, 'db') or not self.db:
+                logger.error("Firestore database not initialized")
+                return None, None
+                
+            # Save place using the correct format
+            place_doc_id = self.save_place_with_tiktok_data(place, tiktok_videos)
+            
+            if not place_doc_id:
+                logger.error("Failed to save place to main collection")
+                return None, None
+            
+            # Add to user's externalPlaces subcollection
+            user_ref = self.db.collection('users').document(user_id)
+            external_places_ref = user_ref.collection('externalPlaces')
+            
+            # Create the external place document with minimal reference data
+            external_place_data = {
+                'placeId': place_doc_id,  # Reference to the main places collection document
+                'name': place.name,
+                'address': place.address,
+                'coordinates': {
+                    'latitude': place.latitude,
+                    'longitude': place.longitude
+                },
+                'source': place.source,
+                'addedAt': firestore.SERVER_TIMESTAMP
+            }
+            
+            # Check if place already exists in user's external places
+            existing_external = external_places_ref.where('placeId', '==', place_doc_id).get()
+            if existing_external:
+                logger.info(f"Place {place_doc_id} already exists in user {user_id}'s externalPlaces")
+                return place_doc_id, existing_external[0].id
+            
+            # Add to externalPlaces
+            doc_ref = external_places_ref.add(external_place_data)
+            external_doc_id = doc_ref[1].id
+            logger.info(f"Added place {place_doc_id} to user {user_id}'s externalPlaces")
+            
+            return place_doc_id, external_doc_id
+            
+        except Exception as e:
+            logger.error(f"Error adding place to user's externalPlaces: {str(e)}")
+            return None, None
+
+    def trigger_whoosh_reindex(self):
+        """Trigger a Whoosh index rebuild to include new places.
+        
+        Note: This requires the Whoosh provider to be initialized and available.
+        In a production environment, consider using a background task queue.
+        """
+        try:
+            from search.whoosh_provider import WhooshSearchProvider
+            
+            # Create a new Whoosh provider instance
+            whoosh_provider = WhooshSearchProvider()
+            
+            # Clear and rebuild the index
+            whoosh_provider.clear_index()
+            logger.info("Whoosh index cleared")
+            
+            # Get all places from Firestore and index them
+            if hasattr(self, 'db') and self.db:
+                places_ref = self.db.collection('places')
+                places = places_ref.get()
+                
+                # Index each place
+                with whoosh_provider.ix.writer() as writer:
+                    for place_doc in places:
+                        place_data = place_doc.to_dict()
+                        
+                        # Extract coordinates (handle both new and old formats)
+                        coordinates = place_data.get('coordinates')
+                        if coordinates and isinstance(coordinates, dict):
+                            # New format: {"latitude": x, "longitude": y}
+                            latitude = coordinates.get('latitude', 0.0)
+                            longitude = coordinates.get('longitude', 0.0)
+                        else:
+                            # Old format: firestore.GeoPoint
+                            coordinate = place_data.get('coordinate')
+                            if coordinate and hasattr(coordinate, 'latitude'):
+                                latitude = coordinate.latitude
+                                longitude = coordinate.longitude
+                            else:
+                                latitude = longitude = 0.0
+                        
+                        # Add to Whoosh index with correct structure
+                        writer.add_document(
+                            name=place_data.get('name', ''),
+                            place_id=place_doc.id,  # Use Firestore document ID
+                            address=place_data.get('address', ''),
+                            latitude=latitude,
+                            longitude=longitude
+                        )
+                
+                logger.info(f"Indexed {len(places)} places in Whoosh")
+                
+                # Force refresh the index
+                whoosh_provider.force_refresh()
+                return True
+            else:
+                logger.error("Firestore database not available for reindexing")
+                return False
+                
+        except ImportError:
+            logger.error("WhooshSearchProvider not available, trying subprocess method")
+            # Fallback to subprocess method
+            import subprocess
+            import os
+            
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)
+            index_script = os.path.join(project_root, 'index_places.py')
+            
+            result = subprocess.run(['python', index_script], 
+                                  capture_output=True, text=True, cwd=project_root)
+            
+            return result.returncode == 0
+            
+        except Exception as e:
+            logger.error(f"Error triggering Whoosh reindex: {str(e)}")
+            return False 
