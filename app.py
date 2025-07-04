@@ -760,9 +760,78 @@ def process_url():
         # Update result with enhanced location info
         result['location_info'] = location_info
         
+        # Save place to Firestore if location info was found and user_id is provided
+        place_saved = False
+        user_id = data.get('user_id')  # Optional user_id in request
+        
+        if location_info and location_info.get('coordinates') and location_info.get('location_name'):
+            try:
+                from search.storage import PlaceStorage
+                from search.base import SearchResult
+                
+                # Create SearchResult from location info
+                lat, lon = location_info['coordinates']
+                search_result = SearchResult(
+                    name=location_info.get('location_name', ''),
+                    address=location_info.get('formatted_address', ''),
+                    latitude=lat,
+                    longitude=lon,
+                    place_id=location_info.get('place_id', ''),
+                    source='tiktok' if 'tiktok' in url.lower() else result.get('processor_type', 'url'),
+                    additional_data={
+                        'city': location_info.get('address_components', {}).get('locality', ''),
+                        'categories': ['restaurant', 'food'] if 'food' in result.get('content', {}).get('hashtags', []) else []
+                    }
+                )
+                
+                # Prepare TikTok video data if this is a TikTok URL
+                tiktok_videos = None
+                if 'tiktok' in url.lower() and result.get('content'):
+                    content = result['content']
+                    tiktok_videos = [{
+                        'video_id': content.get('video_id', ''),
+                        'url': url,
+                        'embed_html': content.get('embed_html', ''),
+                        'thumbnail_url': content.get('thumbnail_url', ''),
+                        'author': {
+                            'username': content.get('author', {}).get('username', ''),
+                            'display_name': content.get('author', {}).get('display_name', '')
+                        },
+                        'hashtags': content.get('hashtags', []),
+                        'created_at': content.get('created_at', '')
+                    }]
+                
+                # Save place
+                storage = PlaceStorage()
+                
+                if user_id:
+                    # Save to both places collection and user's externalPlaces
+                    place_id, external_id = storage.add_place_to_user_external_places(
+                        user_id, search_result, tiktok_videos
+                    )
+                    if place_id:
+                        result['place_saved'] = True
+                        result['place_id'] = place_id
+                        result['external_place_id'] = external_id
+                        place_saved = True
+                        
+                        # Trigger reindex in background (optional)
+                        # storage.trigger_whoosh_reindex()
+                else:
+                    # Just save to places collection without user association
+                    place_id = storage.save_place_with_tiktok_data(search_result, tiktok_videos)
+                    if place_id:
+                        result['place_saved'] = True
+                        result['place_id'] = place_id
+                        place_saved = True
+                        
+            except Exception as e:
+                logger.error(f"Error saving place from URL processing: {str(e)}")
+                result['place_save_error'] = str(e)
+        
         # Log the processed URL
         logger.info(f"Processed URL: {url}, Type: {result.get('processor_type')}, "
-                   f"Location found: {location_info is not None}")
+                   f"Location found: {location_info is not None}, Place saved: {place_saved}")
         
         return jsonify(result)
         
