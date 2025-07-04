@@ -342,9 +342,113 @@ class PlaceStorage:
             logger.error(f"Error saving place: {str(e)}")
             return f"dummy_id_{place.place_id}"
 
-    def add_place_to_user_external_places(self, user_id: str, place: SearchResult) -> tuple:
+    def save_place_with_tiktok_data(self, place: SearchResult, tiktok_videos: list = None) -> str:
+        """Save a place to Firestore using the correct format with TikTok video support.
+        
+        Args:
+            place: SearchResult object with place data
+            tiktok_videos: List of TikTok video objects (optional)
+            
+        Returns:
+            str: Document ID of the saved place or None on error
+        """
+        try:
+            if not hasattr(self, 'db') or not self.db:
+                logger.error("Firestore database not initialized")
+                return None
+                
+            # Check for duplicates first
+            existing_id = self._check_for_duplicate(place)
+            if existing_id:
+                # If place exists and we have TikTok videos, append them
+                if tiktok_videos:
+                    self._append_tiktok_videos_to_place(existing_id, tiktok_videos)
+                return existing_id
+            
+            # Generate UUID for the place
+            place_uuid = str(uuid.uuid4())
+            
+            # Extract additional data
+            additional_data = place.additional_data or {}
+            
+            # Build place data in the correct format
+            place_data = {
+                'id': place_uuid,
+                'name': place.name,
+                'address': place.address,
+                'city': additional_data.get('city', ''),
+                'coordinates': {
+                    'latitude': place.latitude,
+                    'longitude': place.longitude
+                },
+                'categories': additional_data.get('categories', []) or additional_data.get('types', []),
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'source': place.source
+            }
+            
+            # Add source-specific IDs
+            if place.source in ['google', 'google_places']:
+                place_data['google_place_id'] = place.place_id
+            elif place.source == 'mapbox':
+                place_data['mapbox_id'] = place.place_id
+            
+            # Add TikTok videos if provided
+            if tiktok_videos:
+                place_data['tiktok_videos'] = tiktok_videos
+            
+            # Add other optional fields
+            if additional_data.get('phone'):
+                place_data['phone'] = additional_data['phone']
+            if additional_data.get('rating'):
+                place_data['rating'] = additional_data['rating']
+            if additional_data.get('description'):
+                place_data['description'] = additional_data['description']
+                
+            # Save to Firestore using the UUID as document ID
+            places_ref = self.db.collection('places')
+            doc_ref = places_ref.document(place_uuid)
+            doc_ref.set(place_data)
+            
+            logger.info(f"Saved place {place.name} with ID {place_uuid}")
+            return place_uuid
+            
+        except Exception as e:
+            logger.error(f"Error saving place with TikTok data: {str(e)}")
+            return None
+
+    def _append_tiktok_videos_to_place(self, place_id: str, tiktok_videos: list):
+        """Append TikTok videos to an existing place."""
+        try:
+            place_ref = self.db.collection('places').document(place_id)
+            place_doc = place_ref.get()
+            
+            if place_doc.exists:
+                place_data = place_doc.to_dict()
+                existing_videos = place_data.get('tiktok_videos', [])
+                
+                # Get existing video IDs to avoid duplicates
+                existing_video_ids = {video.get('video_id') for video in existing_videos}
+                
+                # Add new videos that don't already exist
+                new_videos = [video for video in tiktok_videos 
+                             if video.get('video_id') not in existing_video_ids]
+                
+                if new_videos:
+                    updated_videos = existing_videos + new_videos
+                    place_ref.update({'tiktok_videos': updated_videos})
+                    logger.info(f"Added {len(new_videos)} new TikTok videos to place {place_id}")
+                
+        except Exception as e:
+            logger.error(f"Error appending TikTok videos to place: {str(e)}")
+
+    def add_place_to_user_external_places(self, user_id: str, place: SearchResult, tiktok_videos: list = None) -> tuple:
         """Add a place to a user's externalPlaces subcollection and save to main places collection.
         
+        Args:
+            user_id: User ID
+            place: SearchResult object
+            tiktok_videos: Optional list of TikTok video data
+            
         Returns:
             tuple: (place_id, external_place_doc_id) or (None, None) on error
         """
@@ -353,10 +457,10 @@ class PlaceStorage:
                 logger.error("Firestore database not initialized")
                 return None, None
                 
-            # Use save_place_old which properly handles duplicates and uses the correct structure
-            place_doc_id = self.save_place_old(place)
+            # Save place using the correct format
+            place_doc_id = self.save_place_with_tiktok_data(place, tiktok_videos)
             
-            if not place_doc_id or place_doc_id.startswith('dummy_id_'):
+            if not place_doc_id:
                 logger.error("Failed to save place to main collection")
                 return None, None
             
@@ -369,7 +473,10 @@ class PlaceStorage:
                 'placeId': place_doc_id,  # Reference to the main places collection document
                 'name': place.name,
                 'address': place.address,
-                'coordinate': firestore.GeoPoint(place.latitude, place.longitude),
+                'coordinates': {
+                    'latitude': place.latitude,
+                    'longitude': place.longitude
+                },
                 'source': place.source,
                 'addedAt': firestore.SERVER_TIMESTAMP
             }
@@ -417,13 +524,20 @@ class PlaceStorage:
                     for place_doc in places:
                         place_data = place_doc.to_dict()
                         
-                        # Extract coordinate if available
-                        coordinate = place_data.get('coordinate')
-                        if coordinate:
-                            latitude = coordinate.latitude
-                            longitude = coordinate.longitude
+                        # Extract coordinates (handle both new and old formats)
+                        coordinates = place_data.get('coordinates')
+                        if coordinates and isinstance(coordinates, dict):
+                            # New format: {"latitude": x, "longitude": y}
+                            latitude = coordinates.get('latitude', 0.0)
+                            longitude = coordinates.get('longitude', 0.0)
                         else:
-                            latitude = longitude = 0.0
+                            # Old format: firestore.GeoPoint
+                            coordinate = place_data.get('coordinate')
+                            if coordinate and hasattr(coordinate, 'latitude'):
+                                latitude = coordinate.latitude
+                                longitude = coordinate.longitude
+                            else:
+                                latitude = longitude = 0.0
                         
                         # Add to Whoosh index with correct structure
                         writer.add_document(
