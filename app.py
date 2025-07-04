@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
@@ -8,6 +8,7 @@ import sys
 import requests
 import time
 from firebase_admin import firestore
+from auth_middleware import require_auth, optional_auth, require_admin
 from search import WhooshSearchProvider, MapboxSearchProvider, GooglePlacesSearchProvider, SearchOrchestrator
 from search.storage import PlaceStorage
 import whoosh
@@ -110,6 +111,7 @@ def index():
     })
 
 @app.route('/search/suggestions', methods=['GET'])
+@optional_auth
 def search_suggestions():
     try:
         query = request.args.get('query')
@@ -313,6 +315,7 @@ def health_check():
     return jsonify(health_status), 200
 
 @app.route('/admin/reindex', methods=['POST'])
+@require_admin
 def reindex_places():
     """Admin endpoint to manually trigger reindexing of places from Firestore"""
     try:
@@ -341,6 +344,7 @@ def reindex_places():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/admin/index-status', methods=['GET'])
+@require_admin
 def get_index_status():
     """Admin endpoint to check the Whoosh index status"""
     try:
@@ -360,6 +364,7 @@ def get_index_status():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/admin/refresh-index', methods=['POST'])
+@require_admin
 def refresh_index():
     """Admin endpoint to force refresh the Whoosh index"""
     try:
@@ -673,6 +678,7 @@ def nearby_places():
         }), 500
 
 @app.route('/process-url', methods=['POST'])
+@optional_auth  # Use optional_auth to allow both authenticated and anonymous usage
 def process_url():
     """Process a URL to extract location information.
     
@@ -763,7 +769,12 @@ def process_url():
         # Check for existing places BEFORE making API calls to reduce Google API usage
         place_saved = False
         existing_place_id = None
-        user_id = data.get('user_id')  # Optional user_id in request
+        
+        # Get user ID from authenticated user (if authenticated)
+        user_id = None
+        if g.user:
+            user_id = g.user.get('uid')
+            logger.info(f"Processing URL for authenticated user: {user_id}")
         
         if location_info and location_info.get('coordinates') and location_info.get('location_name'):
             try:
@@ -789,19 +800,19 @@ def process_url():
                 
                 # If we found an existing place, just add TikTok video if needed and associate with user
                 if existing_place_id:
-                    if 'tiktok' in url.lower() and result.get('content'):
-                        content = result['content']
+                    if 'tiktok' in url.lower() and result.get('data'):
+                        data = result['data']
                         tiktok_videos = [{
-                            'video_id': content.get('video_id', ''),
+                            'video_id': data.get('video_id', ''),
                             'url': url,
-                            'embed_html': content.get('embed_html', ''),
-                            'thumbnail_url': content.get('thumbnail_url', ''),
+                            'embed_html': data.get('embed_html', ''),
+                            'thumbnail_url': data.get('thumbnail_url', ''),
                             'author': {
-                                'username': content.get('author', {}).get('username', ''),
-                                'display_name': content.get('author', {}).get('display_name', '')
+                                'username': data.get('author', {}).get('username', ''),
+                                'display_name': data.get('author', {}).get('display_name', '')
                             },
-                            'hashtags': content.get('hashtags', []),
-                            'created_at': content.get('created_at', '')
+                            'hashtags': data.get('hashtags', []),
+                            'created_at': data.get('created_at', '')
                         }]
                         storage._append_tiktok_videos_to_place(existing_place_id, tiktok_videos)
                     
@@ -857,27 +868,43 @@ def process_url():
                         place_id=location_info.get('place_id', ''),
                         source='tiktok' if 'tiktok' in url.lower() else result.get('processor_type', 'url'),
                         additional_data={
-                            'city': location_info.get('address_components', {}).get('locality', ''),
-                            'categories': ['restaurant', 'food'] if 'food' in result.get('content', {}).get('hashtags', []) else []
+                            'city': location_info.get('address_components', {}).get('locality', '') or location_info.get('city', ''),
+                            'categories': []  # Will be populated below if it's a TikTok URL
                         }
                     )
                     
                     # Prepare TikTok video data if this is a TikTok URL
                     tiktok_videos = None
-                    if 'tiktok' in url.lower() and result.get('content'):
-                        content = result['content']
+                    if 'tiktok' in url.lower() and result.get('data'):
+                        data = result['data']
                         tiktok_videos = [{
-                            'video_id': content.get('video_id', ''),
+                            'video_id': data.get('video_id', ''),
                             'url': url,
-                            'embed_html': content.get('embed_html', ''),
-                            'thumbnail_url': content.get('thumbnail_url', ''),
+                            'embed_html': data.get('embed_html', ''),
+                            'thumbnail_url': data.get('thumbnail_url', ''),
                             'author': {
-                                'username': content.get('author', {}).get('username', ''),
-                                'display_name': content.get('author', {}).get('display_name', '')
+                                'username': data.get('author', {}).get('username', ''),
+                                'display_name': data.get('author', {}).get('display_name', '')
                             },
-                            'hashtags': content.get('hashtags', []),
-                            'created_at': content.get('created_at', '')
+                            'hashtags': data.get('hashtags', []),
+                            'created_at': data.get('created_at', '')
                         }]
+                        
+                        # Extract categories from hashtags
+                        hashtags = data.get('hashtags', [])
+                        categories = []
+                        food_hashtags = ['food', 'foodie', 'restaurant', 'cafe', 'dining', 'eat', 'meal']
+                        if any(tag.lower() in food_hashtags for tag in hashtags):
+                            categories.extend(['restaurant', 'food'])
+                        categories.extend(hashtags[:3])  # Add first few hashtags as categories
+                        
+                        # Update additional_data with categories and city
+                        search_result.additional_data.update({
+                            'categories': list(set(categories)),  # Remove duplicates
+                            'city': location_info.get('address_components', {}).get('locality', '') or 
+                                   location_info.get('city', '') or
+                                   data.get('location', {}).get('city', '') if isinstance(data.get('location'), dict) else ''
+                        })
                     
                     # Save new place
                     if user_id:
