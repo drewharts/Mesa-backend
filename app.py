@@ -760,8 +760,9 @@ def process_url():
         # Update result with enhanced location info
         result['location_info'] = location_info
         
-        # Save place to Firestore if location info was found and user_id is provided
+        # Check for existing places BEFORE making API calls to reduce Google API usage
         place_saved = False
+        existing_place_id = None
         user_id = data.get('user_id')  # Optional user_id in request
         
         if location_info and location_info.get('coordinates') and location_info.get('location_name'):
@@ -769,61 +770,136 @@ def process_url():
                 from search.storage import PlaceStorage
                 from search.base import SearchResult
                 
-                # Create SearchResult from location info
-                lat, lon = location_info['coordinates']
-                search_result = SearchResult(
-                    name=location_info.get('location_name', ''),
-                    address=location_info.get('formatted_address', ''),
-                    latitude=lat,
-                    longitude=lon,
-                    place_id=location_info.get('place_id', ''),
-                    source='tiktok' if 'tiktok' in url.lower() else result.get('processor_type', 'url'),
-                    additional_data={
-                        'city': location_info.get('address_components', {}).get('locality', ''),
-                        'categories': ['restaurant', 'food'] if 'food' in result.get('content', {}).get('hashtags', []) else []
-                    }
-                )
-                
-                # Prepare TikTok video data if this is a TikTok URL
-                tiktok_videos = None
-                if 'tiktok' in url.lower() and result.get('content'):
-                    content = result['content']
-                    tiktok_videos = [{
-                        'video_id': content.get('video_id', ''),
-                        'url': url,
-                        'embed_html': content.get('embed_html', ''),
-                        'thumbnail_url': content.get('thumbnail_url', ''),
-                        'author': {
-                            'username': content.get('author', {}).get('username', ''),
-                            'display_name': content.get('author', {}).get('display_name', '')
-                        },
-                        'hashtags': content.get('hashtags', []),
-                        'created_at': content.get('created_at', '')
-                    }]
-                
-                # Save place
                 storage = PlaceStorage()
                 
-                if user_id:
-                    # Save to both places collection and user's externalPlaces
-                    place_id, external_id = storage.add_place_to_user_external_places(
-                        user_id, search_result, tiktok_videos
+                # First check if we already have this TikTok URL
+                if 'tiktok' in url.lower():
+                    existing_place_id = storage.check_for_existing_place_by_tiktok_url(url)
+                    if existing_place_id:
+                        logger.info(f"Found existing place by TikTok URL: {existing_place_id}")
+                
+                # If no TikTok match, check by name and location
+                if not existing_place_id:
+                    lat, lon = location_info['coordinates']
+                    existing_place_id = storage.check_for_existing_place_by_name_and_location(
+                        location_info.get('location_name', ''), lat, lon
                     )
-                    if place_id:
-                        result['place_saved'] = True
-                        result['place_id'] = place_id
-                        result['external_place_id'] = external_id
-                        place_saved = True
+                    if existing_place_id:
+                        logger.info(f"Found existing place by name and location: {existing_place_id}")
+                
+                # If we found an existing place, just add TikTok video if needed and associate with user
+                if existing_place_id:
+                    if 'tiktok' in url.lower() and result.get('content'):
+                        content = result['content']
+                        tiktok_videos = [{
+                            'video_id': content.get('video_id', ''),
+                            'url': url,
+                            'embed_html': content.get('embed_html', ''),
+                            'thumbnail_url': content.get('thumbnail_url', ''),
+                            'author': {
+                                'username': content.get('author', {}).get('username', ''),
+                                'display_name': content.get('author', {}).get('display_name', '')
+                            },
+                            'hashtags': content.get('hashtags', []),
+                            'created_at': content.get('created_at', '')
+                        }]
+                        storage._append_tiktok_videos_to_place(existing_place_id, tiktok_videos)
+                    
+                    # Associate with user if user_id provided
+                    if user_id:
+                        # Create SearchResult for user association
+                        lat, lon = location_info['coordinates']
+                        search_result = SearchResult(
+                            name=location_info.get('location_name', ''),
+                            address=location_info.get('formatted_address', ''),
+                            latitude=lat,
+                            longitude=lon,
+                            place_id=location_info.get('place_id', ''),
+                            source='tiktok' if 'tiktok' in url.lower() else result.get('processor_type', 'url')
+                        )
                         
-                        # Trigger reindex in background (optional)
-                        # storage.trigger_whoosh_reindex()
+                        # Add to user's external places
+                        user_ref = storage.db.collection('users').document(user_id)
+                        external_places_ref = user_ref.collection('externalPlaces')
+                        
+                        # Check if not already in user's external places
+                        existing_external = external_places_ref.where('placeId', '==', existing_place_id).get()
+                        if not existing_external:
+                            external_place_data = {
+                                'placeId': existing_place_id,
+                                'name': search_result.name,
+                                'address': search_result.address,
+                                'coordinates': {
+                                    'latitude': search_result.latitude,
+                                    'longitude': search_result.longitude
+                                },
+                                'source': search_result.source,
+                                'addedAt': firestore.SERVER_TIMESTAMP
+                            }
+                            doc_ref = external_places_ref.add(external_place_data)
+                            result['external_place_id'] = doc_ref[1].id
+                    
+                    result['place_saved'] = True
+                    result['place_id'] = existing_place_id
+                    result['place_already_existed'] = True
+                    place_saved = True
+                    logger.info(f"Used existing place, avoided API calls: {existing_place_id}")
+                    
                 else:
-                    # Just save to places collection without user association
-                    place_id = storage.save_place_with_tiktok_data(search_result, tiktok_videos)
-                    if place_id:
-                        result['place_saved'] = True
-                        result['place_id'] = place_id
-                        place_saved = True
+                    # No existing place found, proceed with normal creation
+                    # Create SearchResult from location info
+                    lat, lon = location_info['coordinates']
+                    search_result = SearchResult(
+                        name=location_info.get('location_name', ''),
+                        address=location_info.get('formatted_address', ''),
+                        latitude=lat,
+                        longitude=lon,
+                        place_id=location_info.get('place_id', ''),
+                        source='tiktok' if 'tiktok' in url.lower() else result.get('processor_type', 'url'),
+                        additional_data={
+                            'city': location_info.get('address_components', {}).get('locality', ''),
+                            'categories': ['restaurant', 'food'] if 'food' in result.get('content', {}).get('hashtags', []) else []
+                        }
+                    )
+                    
+                    # Prepare TikTok video data if this is a TikTok URL
+                    tiktok_videos = None
+                    if 'tiktok' in url.lower() and result.get('content'):
+                        content = result['content']
+                        tiktok_videos = [{
+                            'video_id': content.get('video_id', ''),
+                            'url': url,
+                            'embed_html': content.get('embed_html', ''),
+                            'thumbnail_url': content.get('thumbnail_url', ''),
+                            'author': {
+                                'username': content.get('author', {}).get('username', ''),
+                                'display_name': content.get('author', {}).get('display_name', '')
+                            },
+                            'hashtags': content.get('hashtags', []),
+                            'created_at': content.get('created_at', '')
+                        }]
+                    
+                    # Save new place
+                    if user_id:
+                        # Save to both places collection and user's externalPlaces
+                        place_id, external_id = storage.add_place_to_user_external_places(
+                            user_id, search_result, tiktok_videos
+                        )
+                        if place_id:
+                            result['place_saved'] = True
+                            result['place_id'] = place_id
+                            result['external_place_id'] = external_id
+                            place_saved = True
+                            
+                            # Trigger reindex in background (optional)
+                            # storage.trigger_whoosh_reindex()
+                    else:
+                        # Just save to places collection without user association
+                        place_id = storage.save_place_with_tiktok_data(search_result, tiktok_videos)
+                        if place_id:
+                            result['place_saved'] = True
+                            result['place_id'] = place_id
+                            place_saved = True
                         
             except Exception as e:
                 logger.error(f"Error saving place from URL processing: {str(e)}")
